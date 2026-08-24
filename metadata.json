@@ -1,0 +1,6 @@
+{
+  "name": "ALPHA WA BOT",
+  "description": "Advanced WhatsApp Automation Bot",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

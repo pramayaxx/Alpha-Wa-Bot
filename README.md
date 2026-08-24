@@ -1,11 +1,15 @@
-<div align="center">
+# 💀 ALPHA WA BOT 💀
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+Engineered by **CAT Shadow Hacker**.
 
-  <h1>Built with AI Studio</h2>
+## Features
+- **Auto-Boot Injection**: Dependencies install automatically on launch.
+- **Dual-Auth**: Scan QR Code or use the 8-Digit Pairing code via `USE_PAIRING_CODE`.
+- **DeepSeek Neural Net**: Responds to Sinhala and English inquiries instantly based on `shop_info.json`.
+- **Admin Control**: Restricted `!menu` with Baileys Interactive Buttons for the configured `ADMIN_NUMBER`.
+- **Auto-Contact DB**: Steals and saves user names/numbers to `contacts.json`.
 
-  <p>The fastest path from prompt to production with Gemini.</p>
-
-  <a href="https://aistudio.google.com/apps">Start building</a>
-
-</div>
+## Setup
+1. Copy `.env.example` to `.env` and insert your credentials.
+2. Edit `shop_info.json` with your inventory payload.
+3. Run `npm start`. The system will handle the rest.

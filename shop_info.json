@@ -1,0 +1,13 @@
+{
+  "shopName": "Shadow Tech Syndicate",
+  "description": "Premium cybernetic hardware, hacking gadgets, and impenetrable software solutions.",
+  "items": [
+    {"name": "Encrypted Shadow Drive (1TB)", "price": "15,000 LKR"},
+    {"name": "Mechanical Stealth Keyboard", "price": "22,000 LKR"},
+    {"name": "Signal Jammer Array", "price": "45,000 LKR"}
+  ],
+  "contactEmail": "admin@shadowsyndicate.net",
+  "operatingHours": "24/7",
+  "welcomeMessage": "Welcome to ALPHA WA BOT! Please tell me how I can assist you today.",
+  "customInstruction": "Always answer in a very polite and professional manner. Do not use emojis."
+}
