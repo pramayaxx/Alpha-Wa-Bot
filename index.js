@@ -1041,7 +1041,13 @@ app.post('/api/pair', async (req, res) => {
     try {
         const { phone } = req.body;
         if (botState.status === 'online') return res.status(400).json({ error: 'Bot is already connected and online.' });
-        const cleanNumber = phone ? phone.replace(/[^0-9]/g, '') : '';
+        
+        let cleanNumber = phone ? phone.replace(/[^0-9]/g, '') : '';
+        if (cleanNumber.startsWith('00')) cleanNumber = cleanNumber.substring(2);
+        if (cleanNumber.startsWith('0') && cleanNumber.length === 10) {
+            cleanNumber = '94' + cleanNumber.substring(1);
+        }
+        
         if (!cleanNumber || cleanNumber.length < 8) return res.status(400).json({ error: 'Please enter a valid phone number with country code (e.g. 94781234567).' });
         
         botState.pairingCode = 'GENERATING...';
@@ -1156,41 +1162,31 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
     });
     
     globalSock = sock;
+    let pairingCodeRequested = false;
 
-    // Handle pairing phone number on boot or on-demand
-    if (pairingPhoneNumber && !sock.authState.creds.registered) {
-        setTimeout(async () => {
-            try {
-                let code = await sock.requestPairingCode(pairingPhoneNumber);
-                botState.pairingCode = code;
-                botState.qr = null;
-                io.emit('bot_state', botState);
-                console.log(`[PAIRING CODE GENERATED]: ${code}`);
-            } catch(e) {
-                console.error('Pairing code generation error:', e.message);
-            }
-        }, 3000);
-    } else if (process.env.USE_PAIRING_CODE === 'true' && !sock.authState.creds.registered) {
-        const phoneNumber = process.env.BOT_PHONE_NUMBER?.replace(/[^0-9]/g, '');
-        if(phoneNumber) {
-            setTimeout(async () => {
-                try {
-                    let code = await sock.requestPairingCode(phoneNumber);
-                    botState.pairingCode = code;
-                    botState.qr = null;
-                    io.emit('bot_state', botState);
-                } catch(e) {}
-            }, 3000);
-        }
-    }
-
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
         if (qr) {
-            botState.qr = qr;
-            io.emit('bot_state', botState);
-            console.log('[QR READY] New WhatsApp QR Code generated.');
+            if (pairingPhoneNumber && !pairingCodeRequested && !sock.authState.creds.registered) {
+                pairingCodeRequested = true;
+                setTimeout(async () => {
+                    try {
+                        let code = await sock.requestPairingCode(pairingPhoneNumber);
+                        code = code?.match(/.{1,4}/g)?.join("-") || code;
+                        botState.pairingCode = code;
+                        botState.qr = null;
+                        io.emit('bot_state', botState);
+                        console.log(`[PAIRING CODE GENERATED]: ${code}`);
+                    } catch(e) {
+                        console.error('Pairing code generation error:', e.message);
+                    }
+                }, 1500);
+            } else if (!pairingPhoneNumber) {
+                botState.qr = qr;
+                io.emit('bot_state', botState);
+                console.log('[QR READY] New WhatsApp QR Code generated.');
+            }
         }
 
         if(connection === 'close') {
