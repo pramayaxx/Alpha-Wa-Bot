@@ -1,0 +1,9 @@
+{
+  "shopName": "ALPHA MOBILE BOT Syndicate",
+  "welcomeMessage": "Welcome to ALPHA MOBILE BOT! How can I assist you?",
+  "customInstruction": "Always answer politely.",
+  "keywords": {
+    "location": "We are located at ALPHA MOBILE BOT HQ.",
+    "menu": "1. Catalog\n2. Order\n3. Support"
+  }
+}

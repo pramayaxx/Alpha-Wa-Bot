@@ -1,0 +1,53 @@
+{
+  "botName": "ALPHA MOBILE BOT",
+  "aliveMsg": "⚡ *ALPHA MOBILE BOT IS ONLINE & FORTIFIED*",
+  "mutedUsers": [],
+  "plugins": {
+    "ai": true,
+    "tts": true,
+    "translate": true,
+    "wiki": true,
+    "stickers": true,
+    "qr": true,
+    "orders": true,
+    "groupAdmin": true,
+    "quotes": true,
+    "songSearch": true,
+    "antidelete": true,
+    "antilink": true,
+    "antispam": true,
+    "antiword": true,
+    "welcomeGoodbye": true,
+    "autoReact": false,
+    "readReceipts": true,
+    "mediaDownload": true,
+    "games": true,
+    "warnSystem": true,
+    "attp": true,
+    "emojimix": true,
+    "mediaDownloader": true,
+    "funCommands": true
+  },
+  "workType": "public",
+  "prefix": "!",
+  "botLang": "si",
+  "bannedWords": [
+    "spam",
+    "free money",
+    "t.me/",
+    "whatsapp.com/channel/"
+  ],
+  "customPlugins": [
+    {
+      "name": "calc",
+      "desc": "Quick mathematical evaluator",
+      "code": "return eval(args.join(\" \"));"
+    },
+    {
+      "name": "flip",
+      "desc": "Coin flipper",
+      "code": "return Math.random() > 0.5 ? \"🪙 Heads!\" : \"🪙 Tails!\";"
+    }
+  ],
+  "botBanner": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80"
+}

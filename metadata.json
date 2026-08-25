@@ -1,6 +1,6 @@
 {
-  "name": "ALPHA WA BOT",
-  "description": "Advanced WhatsApp Automation Bot",
+  "name": "ALPHA MOBILE BOT",
+  "description": "Multi-Session WhatsApp & IM Gateway powered by WPPConnect, Levanter-MD, Knightbot-MD, and DSH-IM (DeepSeek Harness Multi-Channel IM Connector)",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
