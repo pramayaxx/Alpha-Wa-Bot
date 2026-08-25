@@ -7,7 +7,7 @@ import {
   Shield, Trash2, Code2, Webhook, Plus, Eye, Check, Gamepad2, Swords,
   Sparkles, HelpCircle, Smile, Flame, RefreshCw, UserX, UserCheck, VolumeX,
   Share2, Film, Download, ShieldCheck, Network, Brain, Layers, Workflow,
-  FileText, SlidersHorizontal, Cable, MessageCircle, SendHorizontal
+  FileText, SlidersHorizontal, Cable, MessageCircle, SendHorizontal, Copy, LogOut, Loader2
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { io } from 'socket.io-client';
@@ -207,6 +207,7 @@ export default function App() {
   }, [chatHistory, activeChat]);
 
   const fetchData = async () => {
+    fetch('/api/state').then(r => r.json()).then(setBotState).catch(() => {});
     fetch('/api/contacts').then(r => r.json()).then(setContacts).catch(() => {});
     fetch('/api/shop').then(r => r.json()).then(data => setShopInfo(JSON.stringify(data, null, 2))).catch(() => {});
     fetch('/api/orders').then(r => r.json()).then(setOrders).catch(() => {});
@@ -808,18 +809,60 @@ export default function App() {
     } catch (e) { alert('💀 INVALID JSON SYNTAX. FIX IT.'); }
   };
 
+  const [isPairingLoading, setIsPairingLoading] = useState(false);
+  const [isQrRefreshing, setIsQrRefreshing] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
+
   const requestPairingCode = async () => {
-    if (!phoneInput) return alert("💀 Enter phone number");
-    addLog(`Requesting pairing code for ${phoneInput}...`);
+    if (!phoneInput) return alert("💀 Enter WhatsApp phone number with country code (e.g. 94781234567)");
+    setIsPairingLoading(true);
+    addLog(`Requesting pairing code for +${phoneInput.replace(/[^0-9]/g, '')}...`);
     try {
+      setBotState(prev => ({ ...prev, pairingCode: 'GENERATING...' }));
       const res = await fetch('/api/pair', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: phoneInput })
       });
       const data = await res.json();
-      if (!data.success) alert(`💀 ${data.error}`);
-    } catch (e) { addLog('Network Error.'); }
+      if (data.success && data.code) {
+        setBotState(prev => ({ ...prev, pairingCode: data.code }));
+        addLog(`🔑 WhatsApp Pairing Code generated: ${data.code}`);
+      } else {
+        alert(`💀 Pairing Error: ${data.error || 'Failed to generate code. Check phone format.'}`);
+        setBotState(prev => ({ ...prev, pairingCode: null }));
+      }
+    } catch (e) {
+      addLog('Network Error while requesting pairing code.');
+      setBotState(prev => ({ ...prev, pairingCode: null }));
+    } finally {
+      setIsPairingLoading(false);
+    }
+  };
+
+  const refreshQrCode = async () => {
+    setIsQrRefreshing(true);
+    addLog('Refreshing WhatsApp QR scan session...');
+    try {
+      const res = await fetch('/api/refresh-qr', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        addLog('🔄 Session cleared. Fresh QR code stream initialized.');
+        fetchData();
+      }
+    } catch(e) {
+      addLog('Failed to reset QR session.');
+    } finally {
+      setTimeout(() => setIsQrRefreshing(false), 2000);
+    }
+  };
+
+  const copyPairingCode = () => {
+    if (!botState.pairingCode) return;
+    navigator.clipboard.writeText(botState.pairingCode);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2000);
+    addLog(`📋 Copied Pairing Code [${botState.pairingCode}] to clipboard.`);
   };
 
   const runCommandSim = async () => {
@@ -931,33 +974,118 @@ _Levanter Multi-Session Modular Engine_
   };
 
   const renderAuthUI = () => (
-    <div className="bg-gradient-to-b from-cyan-950/20 to-black/40 border border-cyan-800 p-6 flex flex-col items-center justify-center min-h-[300px] relative">
+    <div className="bg-gradient-to-b from-cyan-950/30 via-black/80 to-black/90 border border-cyan-800 p-6 flex flex-col items-center justify-center min-h-[340px] relative">
       {botState.status === 'online' ? (
-        <div className="text-center flex flex-col items-center gap-4">
-          <Activity size={48} className="text-cyan-300 animate-pulse" />
-          <p className="text-2xl font-black text-cyan-300 tracking-[0.2em]">LEVANTER NEURAL LINK ACTIVE</p>
-          <div className="flex flex-wrap justify-center gap-4 text-xs font-mono text-cyan-500">
-            <span className="flex items-center gap-1"><Server size={14} /> Mode: {settings.workType.toUpperCase()}</span>
-            <span className="flex items-center gap-1"><Globe size={14} /> Lang: {settings.botLang.toUpperCase()}</span>
-            <span className="flex items-center gap-1"><Clock size={14} /> Uptime: {systemStats?.uptime || 'Active'}</span>
-            <span className="flex items-center gap-1"><HardDrive size={14} /> RAM: {systemStats?.memoryMB || '42'} MB</span>
-            <span className="flex items-center gap-1"><Shield size={14} className="text-emerald-400" /> Antidote Shield: ON</span>
+        <div className="text-center flex flex-col items-center gap-4 w-full py-4">
+          <Activity size={48} className="text-emerald-400 animate-pulse" />
+          <p className="text-2xl font-black text-emerald-400 tracking-[0.2em]">⚡ ALPHA MOBILE BOT ACTIVE & ONLINE</p>
+          <div className="flex flex-wrap justify-center gap-4 text-xs font-mono text-cyan-400 max-w-2xl bg-black/60 border border-cyan-900/80 p-4">
+            <span className="flex items-center gap-1.5"><Server size={14} className="text-cyan-400" /> Mode: <strong>{settings.workType.toUpperCase()}</strong></span>
+            <span className="flex items-center gap-1.5"><Globe size={14} className="text-cyan-400" /> Lang: <strong>{settings.botLang.toUpperCase()}</strong></span>
+            <span className="flex items-center gap-1.5"><Clock size={14} className="text-cyan-400" /> Uptime: <strong>{systemStats?.uptime || 'Active'}</strong></span>
+            <span className="flex items-center gap-1.5"><HardDrive size={14} className="text-cyan-400" /> RAM: <strong>{systemStats?.memoryMB || '42'} MB</strong></span>
+            <span className="flex items-center gap-1.5"><Shield size={14} className="text-emerald-400" /> Antidote: <strong>ON</strong></span>
           </div>
+          <button 
+            onClick={refreshQrCode}
+            className="mt-2 text-xs px-4 py-2 bg-red-950/40 border border-red-800 text-red-400 hover:bg-red-900/60 hover:text-red-200 transition-all flex items-center gap-2 font-bold uppercase tracking-wider"
+          >
+            <LogOut size={14} /> Disconnect & Reset Session
+          </button>
         </div>
       ) : (
-        <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-8">
-          <div className="flex flex-col items-center gap-4 md:border-r border-cyan-900/50 md:pr-8">
-            <p className="text-cyan-600 text-xs tracking-widest uppercase flex items-center gap-2"><ScanLine size={16} /> Matrix QR Scan</p>
-            {botState.qr ? <QRCodeSVG value={botState.qr} size={180} /> : <div className="w-[180px] h-[180px] border border-cyan-900 flex items-center justify-center text-xs text-cyan-800">WAITING FOR PAIR...</div>}
+        <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-8 py-2">
+          {/* QR CODE SCAN SECTION */}
+          <div className="flex flex-col items-center gap-4 md:border-r border-cyan-900/60 md:pr-8">
+            <div className="flex justify-between items-center w-full px-2">
+              <p className="text-cyan-400 text-xs tracking-widest uppercase font-bold flex items-center gap-2">
+                <ScanLine size={16} className="text-cyan-400" /> Option 1: Matrix QR Scan
+              </p>
+              <button 
+                onClick={refreshQrCode}
+                disabled={isQrRefreshing}
+                className="text-[11px] px-2.5 py-1 bg-cyan-950 border border-cyan-800 text-cyan-300 hover:border-cyan-500 flex items-center gap-1.5 transition-all disabled:opacity-50"
+                title="Generate a brand new QR Code"
+              >
+                <RefreshCw size={12} className={isQrRefreshing ? 'animate-spin' : ''} /> {isQrRefreshing ? 'Refreshing...' : 'New QR'}
+              </button>
+            </div>
+            
+            <div className="p-3 bg-white border-2 border-cyan-500 rounded-sm shadow-[0_0_20px_rgba(6,182,212,0.2)] flex items-center justify-center min-w-[200px] min-h-[200px]">
+              {botState.qr ? (
+                <QRCodeSVG value={botState.qr} size={190} level="M" />
+              ) : (
+                <div className="w-[190px] h-[190px] bg-black/95 text-cyan-500 flex flex-col items-center justify-center text-center p-3 gap-2 font-mono text-xs">
+                  <RefreshCw size={24} className="animate-spin text-cyan-400 opacity-80" />
+                  <span className="text-cyan-300 font-bold uppercase tracking-wider text-[11px]">Generating QR...</span>
+                  <span className="text-[10px] text-cyan-600">WhatsApp Baileys engine handshake in progress</span>
+                </div>
+              )}
+            </div>
+
+            <p className="text-[11px] text-cyan-600 text-center max-w-xs">
+              Open WhatsApp &gt; Linked Devices &gt; Link a device &gt; Point camera at QR Code.
+            </p>
           </div>
-          <div className="flex flex-col items-center justify-center gap-4">
-            <p className="text-fuchsia-500 text-xs tracking-widest uppercase flex items-center gap-2"><Smartphone size={16} /> WhatsApp Pairing Code (8 Digits)</p>
+
+          {/* 8-DIGIT PAIRING CODE SECTION */}
+          <div className="flex flex-col items-center justify-between gap-4">
+            <div className="w-full">
+              <p className="text-fuchsia-400 text-xs tracking-widest uppercase font-bold flex items-center gap-2">
+                <Smartphone size={16} className="text-fuchsia-400" /> Option 2: 8-Digit Pairing Code
+              </p>
+              <p className="text-[11px] text-fuchsia-600/80 mt-1">
+                Link device directly via phone number without scanning QR
+              </p>
+            </div>
+
             {botState.pairingCode ? (
-              <div className="text-4xl font-black tracking-[0.25em] text-fuchsia-400 bg-fuchsia-950/40 p-4 border border-fuchsia-600">{botState.pairingCode}</div>
+              <div className="flex flex-col items-center gap-3 w-full bg-fuchsia-950/30 border border-fuchsia-700/60 p-5">
+                <span className="text-xs text-fuchsia-300 uppercase font-bold tracking-widest">Your Pairing Code:</span>
+                <div className="text-3xl sm:text-4xl font-black tracking-[0.25em] text-fuchsia-300 bg-black/80 px-6 py-3 border-2 border-fuchsia-500 font-mono shadow-[0_0_20px_rgba(217,70,239,0.3)]">
+                  {botState.pairingCode}
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <button 
+                    onClick={copyPairingCode}
+                    className="text-xs px-4 py-2 bg-fuchsia-900 border border-fuchsia-500 text-fuchsia-200 hover:bg-fuchsia-800 transition-all font-bold flex items-center gap-1.5"
+                  >
+                    {copiedCode ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                    {copiedCode ? 'COPIED TO CLIPBOARD!' : 'COPY PAIR CODE'}
+                  </button>
+                  <button 
+                    onClick={() => setBotState(prev => ({ ...prev, pairingCode: null }))}
+                    className="text-xs px-3 py-2 bg-black border border-fuchsia-900 text-fuchsia-500 hover:text-fuchsia-300"
+                  >
+                    Enter Different Number
+                  </button>
+                </div>
+                <span className="text-[10px] text-fuchsia-400 text-center">
+                  Open WhatsApp notification &gt; Enter code within 2 minutes.
+                </span>
+              </div>
             ) : (
-              <div className="flex flex-col gap-2 w-full max-w-xs">
-                <input type="text" value={phoneInput} onChange={e => setPhoneInput(e.target.value)} placeholder="Bot Number (947X...)" className="w-full bg-black border border-cyan-800 p-3 text-cyan-400 text-center text-sm font-bold" />
-                <button onClick={requestPairingCode} className="w-full bg-fuchsia-900 border-2 border-fuchsia-500 text-fuchsia-300 py-2.5 uppercase tracking-widest font-black text-xs hover:bg-fuchsia-800">Request Pairing Code</button>
+              <div className="flex flex-col gap-3 w-full max-w-xs my-auto">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] uppercase tracking-wider text-cyan-600">WhatsApp Phone Number (with Country Code):</label>
+                  <input 
+                    type="text" 
+                    value={phoneInput} 
+                    onChange={e => setPhoneInput(e.target.value)} 
+                    placeholder="e.g. 94781234567" 
+                    className="w-full bg-black border-2 border-cyan-800 focus:border-fuchsia-500 p-3 text-cyan-300 text-center text-sm font-bold tracking-wider outline-none transition-all" 
+                  />
+                  <span className="text-[10px] text-cyan-700">Sri Lanka: 947XXXXXXXX (No leading 0 or +)</span>
+                </div>
+                
+                <button 
+                  onClick={requestPairingCode} 
+                  disabled={isPairingLoading}
+                  className="w-full bg-fuchsia-950/80 hover:bg-fuchsia-900 border-2 border-fuchsia-500 text-fuchsia-200 py-3 uppercase tracking-widest font-black text-xs transition-all shadow-[0_0_15px_rgba(217,70,239,0.25)] flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isPairingLoading ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} />}
+                  {isPairingLoading ? 'CONNECTING BAILEYS...' : 'GET PAIRING CODE'}
+                </button>
               </div>
             )}
           </div>

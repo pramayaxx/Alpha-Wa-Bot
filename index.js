@@ -26,7 +26,10 @@ const {
     useMultiFileAuthState, 
     DisconnectReason,
     downloadMediaMessage,
-    fetchLatestBaileysVersion
+    fetchLatestBaileysVersion,
+    Browsers,
+    makeCacheableSignalKeyStore,
+    delay
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const axios = require('axios');
@@ -1003,6 +1006,8 @@ app.get('/api/system-stats', (req, res) => {
     });
 });
 
+app.get('/api/state', (req, res) => res.json(botState));
+
 app.get('/api/orders', (req, res) => res.json(readData('orders', [])));
 app.get('/api/schedules', (req, res) => res.json(readData('schedules', [])));
 
@@ -1035,27 +1040,77 @@ app.post('/api/broadcast', async (req, res) => {
 app.post('/api/pair', async (req, res) => {
     try {
         const { phone } = req.body;
-        if (botState.status === 'online') return res.status(400).json({ error: '💀 Bot is already online.' });
-        const cleanNumber = phone.replace(/[^0-9]/g, '');
-        if (!cleanNumber) return res.status(400).json({ error: '💀 Invalid phone number.' });
+        if (botState.status === 'online') return res.status(400).json({ error: 'Bot is already connected and online.' });
+        const cleanNumber = phone ? phone.replace(/[^0-9]/g, '') : '';
+        if (!cleanNumber || cleanNumber.length < 8) return res.status(400).json({ error: 'Please enter a valid phone number with country code (e.g. 94781234567).' });
         
+        botState.pairingCode = 'GENERATING...';
+        botState.qr = null;
+        io.emit('bot_state', botState);
+
         if (globalSock) {
-            globalSock.ev.removeAllListeners();
+            try { globalSock.ev.removeAllListeners(); } catch(e){}
             try { globalSock.ws.close(); } catch(e){}
+            globalSock = null;
         }
         
         if (fs.existsSync('auth_info_baileys')) {
-            fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+            try { fs.rmSync('auth_info_baileys', { recursive: true, force: true }); } catch(e){}
         }
 
-        await new Promise(r => setTimeout(r, 1000));
-        connectToWhatsApp(cleanNumber);
-        await new Promise(r => setTimeout(r, 3000));
-        
-        const code = await globalSock.requestPairingCode(cleanNumber);
-        botState.pairingCode = code;
-        res.json({ success: true, code });
+        await new Promise(r => setTimeout(r, 600));
+        await connectToWhatsApp(cleanNumber);
+
+        // Wait up to 10 seconds for pairing code to generate
+        let attempts = 0;
+        while (attempts < 20) {
+            await new Promise(r => setTimeout(r, 500));
+            if (botState.pairingCode && botState.pairingCode !== 'GENERATING...') {
+                return res.json({ success: true, code: botState.pairingCode });
+            }
+            if (globalSock && !globalSock.authState?.creds?.registered && attempts >= 4) {
+                try {
+                    const code = await globalSock.requestPairingCode(cleanNumber);
+                    if (code) {
+                        botState.pairingCode = code;
+                        botState.qr = null;
+                        io.emit('bot_state', botState);
+                        return res.json({ success: true, code });
+                    }
+                } catch (e) {}
+            }
+            attempts++;
+        }
+
+        if (botState.pairingCode && botState.pairingCode !== 'GENERATING...') {
+            return res.json({ success: true, code: botState.pairingCode });
+        }
+
+        res.json({ success: true, code: botState.pairingCode || 'Check screen in 3s' });
     } catch (e) {
+        console.error('Pairing error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/refresh-qr', async (req, res) => {
+    try {
+        if (globalSock) {
+            try { globalSock.ev.removeAllListeners(); } catch(e){}
+            try { globalSock.ws.close(); } catch(e){}
+            globalSock = null;
+        }
+        if (fs.existsSync('auth_info_baileys')) {
+            try { fs.rmSync('auth_info_baileys', { recursive: true, force: true }); } catch(e){}
+        }
+        botState.status = 'offline';
+        botState.qr = null;
+        botState.pairingCode = null;
+        io.emit('bot_state', botState);
+
+        setTimeout(() => connectToWhatsApp(), 1000);
+        res.json({ success: true, message: 'Session reset. Generating fresh QR code...' });
+    } catch(e) {
         res.status(500).json({ error: e.message });
     }
 });
@@ -1096,21 +1151,41 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
 
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: false,
-        auth: state,
+        printQRInTerminal: true,
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore ? makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) : state.keys,
+        },
         version,
-        browser: ['Levanter-MD', 'Chrome', '120.0.6099.199']
+        browser: Browsers.ubuntu('Chrome'),
+        generateHighQualityLinkPreview: true,
+        syncFullHistory: false
     });
     
     globalSock = sock;
 
-    if (process.env.USE_PAIRING_CODE === 'true' && !sock.authState.creds.registered && !pairingPhoneNumber) {
+    // Handle pairing phone number on boot or on-demand
+    if (pairingPhoneNumber && !sock.authState.creds.registered) {
+        setTimeout(async () => {
+            try {
+                const code = await sock.requestPairingCode(pairingPhoneNumber);
+                botState.pairingCode = code;
+                botState.qr = null;
+                io.emit('bot_state', botState);
+                console.log(`[PAIRING CODE GENERATED]: ${code}`);
+            } catch(e) {
+                console.error('Pairing code generation error:', e.message);
+            }
+        }, 3000);
+    } else if (process.env.USE_PAIRING_CODE === 'true' && !sock.authState.creds.registered) {
         const phoneNumber = process.env.BOT_PHONE_NUMBER?.replace(/[^0-9]/g, '');
         if(phoneNumber) {
             setTimeout(async () => {
                 try {
                     let code = await sock.requestPairingCode(phoneNumber);
                     botState.pairingCode = code;
+                    botState.qr = null;
+                    io.emit('bot_state', botState);
                 } catch(e) {}
             }, 3000);
         }
@@ -1119,21 +1194,30 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
         
-        if (qr) botState.qr = qr;
+        if (qr) {
+            botState.qr = qr;
+            io.emit('bot_state', botState);
+            console.log('[QR READY] New WhatsApp QR Code generated.');
+        }
 
         if(connection === 'close') {
             botState.status = 'offline';
             io.emit('bot_state', botState);
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            if(shouldReconnect) setTimeout(() => connectToWhatsApp(), 2000);
-            else { botState.qr = null; botState.pairingCode = null; }
+            if(shouldReconnect) {
+                setTimeout(() => connectToWhatsApp(), 3000);
+            } else {
+                botState.qr = null;
+                botState.pairingCode = null;
+                io.emit('bot_state', botState);
+            }
         } else if(connection === 'open') {
             botState.status = 'online';
             botState.qr = null;
             botState.pairingCode = null;
             io.emit('bot_state', botState);
-            console.log('💀 LEVANTER-MD BOT IS ONLINE.');
+            console.log('⚡ ALPHA MOBILE BOT IS ONLINE & FORTIFIED.');
         }
     });
 
