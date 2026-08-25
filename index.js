@@ -1138,6 +1138,9 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
 
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
+    const NodeCache = require('node-cache');
+    const msgRetryCounterCache = new NodeCache();
+
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
@@ -1146,7 +1149,8 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
             keys: makeCacheableSignalKeyStore ? makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) : state.keys,
         },
         version,
-        browser: ["Ubuntu", "Chrome", "20.0.04"],
+        browser: Browsers.macOS('Safari'),
+        msgRetryCounterCache,
         generateHighQualityLinkPreview: true,
         syncFullHistory: false
     });
@@ -1195,7 +1199,7 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             if(shouldReconnect) {
-                setTimeout(() => connectToWhatsApp(pairingPhoneNumber), 3000);
+                setTimeout(() => connectToWhatsApp(), 3000); // Intentionally not passing pairingPhoneNumber to avoid invalidating the current code
             } else {
                 botState.qr = null;
                 botState.pairingCode = null;
