@@ -1,4 +1,4 @@
-const fs = require('fs');
+const fs = require("fs");
 const { execSync } = require('child_process');
 const express = require('express');
 const path = require('path');
@@ -62,7 +62,7 @@ const readData = (name, defaultVal) => {
             const content = fs.readFileSync(dataFile(name), 'utf8');
             return content.trim() ? JSON.parse(content) : defaultVal;
         } catch (e) {
-            console.error(`💀 Error parsing ${name}.json. Resetting to default.`);
+            console.log(`💀 Error parsing ${name}.json. Resetting to default.`);
             return defaultVal;
         }
     }
@@ -247,7 +247,7 @@ io.on('connection', (socket) => {
                 }
 
                 updateHistory(number, 'admin', text);
-            } catch(e) { console.error('Socket Send Error:', e); }
+            } catch(e) { console.log('Socket Send Error:', e); }
         }
     });
 
@@ -1083,7 +1083,7 @@ app.post('/api/pair', async (req, res) => {
 
         res.status(408).json({ error: 'Pairing code timeout. Please try again or check logs.' });
     } catch (e) {
-        console.error('Pairing error:', e);
+        console.log('Pairing error:', e);
         res.status(500).json({ error: e.message });
     }
 });
@@ -1150,43 +1150,48 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore ? makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) : state.keys,
-        },
-        version,
-        browser: Browsers.macOS('Safari'),
-        msgRetryCounterCache,
-        generateHighQualityLinkPreview: true,
-        syncFullHistory: false
+        auth: state,
+        browser: Browsers.macOS('Desktop')
     });
     
     globalSock = sock;
     let pairingCodeRequested = false;
 
+    if (pairingPhoneNumber && !sock.authState.creds.registered) {
+        setTimeout(async () => {
+            try {
+                let code = await sock.requestPairingCode(pairingPhoneNumber);
+                botState.pairingCode = code;
+                botState.qr = null;
+                io.emit('bot_state', botState);
+                console.log(`[PAIRING CODE GENERATED]: ${code}`);
+            } catch(e) {
+                console.log('Pairing code generation error:', e.message);
+            }
+        }, 3000);
+    } else if (!pairingPhoneNumber && process.env.USE_PAIRING_CODE === 'true' && !sock.authState.creds.registered) {
+        const phoneNumber = process.env.BOT_PHONE_NUMBER?.replace(/[^0-9]/g, '');
+        if(phoneNumber) {
+            setTimeout(async () => {
+                try {
+                    let code = await sock.requestPairingCode(phoneNumber);
+                    botState.pairingCode = code;
+                    botState.qr = null;
+                    io.emit('bot_state', botState);
+                } catch(e) {}
+            }, 3000);
+        }
+    }
+
+
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
-        if (qr) {
-            if (pairingPhoneNumber && !pairingCodeRequested && !sock.authState.creds.registered) {
-                pairingCodeRequested = true;
-                setTimeout(async () => {
-                    try {
-                        let code = await sock.requestPairingCode(pairingPhoneNumber);
-                        code = code?.match(/.{1,4}/g)?.join("-") || code;
-                        botState.pairingCode = code;
-                        botState.qr = null;
-                        io.emit('bot_state', botState);
-                        console.log(`[PAIRING CODE GENERATED]: ${code}`);
-                    } catch(e) {
-                        console.error('Pairing code generation error:', e.message);
-                    }
-                }, 1500);
-            } else if (!pairingPhoneNumber) {
-                botState.qr = qr;
-                io.emit('bot_state', botState);
-                console.log('[QR READY] New WhatsApp QR Code generated.');
-            }
+        
+        if (qr && !pairingPhoneNumber) {
+            botState.qr = qr;
+            io.emit('bot_state', botState);
+            console.log('[QR READY] New WhatsApp QR Code generated.');
         }
 
         if(connection === 'close') {
@@ -1230,7 +1235,7 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
                     await sock.sendMessage(id, { text: byeTxt, mentions: [userJid] });
                 }
             }
-        } catch (e) { console.error('Group event error:', e); }
+        } catch (e) { console.log('Group event error:', e); }
     });
 
     // --- LEVANTER ANTIDELETE (MESSAGE UPDATE DETECTION) ---
@@ -1312,12 +1317,12 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
         // Media Logging
         if (msg.message.imageMessage || msg.message.audioMessage || msg.message.documentMessage) {
             try {
-                const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'info' }) });
                 const ext = msg.message.imageMessage ? 'jpg' : msg.message.audioMessage ? 'ogg' : 'pdf';
                 const filename = `${senderNumber}_${Date.now()}.${ext}`;
                 fs.writeFileSync(path.join(__dirname, 'media', filename), buffer);
                 if (!text) text = `[MEDIA RECEIVED: ${ext.toUpperCase()}]`;
-            } catch(e) { console.error('Media download error'); }
+            } catch(e) { console.log('Media download error'); }
         }
 
         // Live Chat Logging in Dashboard
@@ -2076,7 +2081,7 @@ _Answer by sending \`!quiz 1\`, \`!quiz 2\`, \`!quiz 3\`, or \`!quiz 4\`_`;
 
             if (targetMsg.message.imageMessage) {
                 try {
-                    const buffer = await downloadMediaMessage(targetMsg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
+                    const buffer = await downloadMediaMessage(targetMsg, 'buffer', {}, { logger: pino({ level: 'info' }) });
                     await sock.sendMessage(from, { 
                         sticker: buffer 
                     }, { quoted: msg });
