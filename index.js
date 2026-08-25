@@ -1140,13 +1140,13 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
 
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: true,
+        printQRInTerminal: false,
         auth: {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore ? makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) : state.keys,
         },
         version,
-        browser: Browsers.macOS('Desktop'),
+        browser: ["Ubuntu", "Chrome", "20.0.04"],
         generateHighQualityLinkPreview: true,
         syncFullHistory: false
     });
@@ -1158,7 +1158,6 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
         setTimeout(async () => {
             try {
                 let code = await sock.requestPairingCode(pairingPhoneNumber);
-                code = code?.match(/.{1,4}/g)?.join("-") || code;
                 botState.pairingCode = code;
                 botState.qr = null;
                 io.emit('bot_state', botState);
@@ -1173,7 +1172,6 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
             setTimeout(async () => {
                 try {
                     let code = await sock.requestPairingCode(phoneNumber);
-                    code = code?.match(/.{1,4}/g)?.join("-") || code;
                     botState.pairingCode = code;
                     botState.qr = null;
                     io.emit('bot_state', botState);
@@ -1197,7 +1195,7 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             if(shouldReconnect) {
-                setTimeout(() => connectToWhatsApp(), 3000);
+                setTimeout(() => connectToWhatsApp(pairingPhoneNumber), 3000);
             } else {
                 botState.qr = null;
                 botState.pairingCode = null;
