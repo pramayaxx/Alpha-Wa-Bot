@@ -1061,23 +1061,12 @@ app.post('/api/pair', async (req, res) => {
         await new Promise(r => setTimeout(r, 600));
         await connectToWhatsApp(cleanNumber);
 
-        // Wait up to 10 seconds for pairing code to generate
+        // Wait up to 15 seconds for pairing code to generate
         let attempts = 0;
-        while (attempts < 20) {
+        while (attempts < 30) {
             await new Promise(r => setTimeout(r, 500));
             if (botState.pairingCode && botState.pairingCode !== 'GENERATING...') {
                 return res.json({ success: true, code: botState.pairingCode });
-            }
-            if (globalSock && !globalSock.authState?.creds?.registered && attempts >= 4) {
-                try {
-                    const code = await globalSock.requestPairingCode(cleanNumber);
-                    if (code) {
-                        botState.pairingCode = code;
-                        botState.qr = null;
-                        io.emit('bot_state', botState);
-                        return res.json({ success: true, code });
-                    }
-                } catch (e) {}
             }
             attempts++;
         }
@@ -1086,7 +1075,7 @@ app.post('/api/pair', async (req, res) => {
             return res.json({ success: true, code: botState.pairingCode });
         }
 
-        res.json({ success: true, code: botState.pairingCode || 'Check screen in 3s' });
+        res.status(408).json({ error: 'Pairing code timeout. Please try again or check logs.' });
     } catch (e) {
         console.error('Pairing error:', e);
         res.status(500).json({ error: e.message });
@@ -1157,7 +1146,7 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
             keys: makeCacheableSignalKeyStore ? makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) : state.keys,
         },
         version,
-        browser: Browsers.ubuntu('Chrome'),
+        browser: Browsers.macOS('Desktop'),
         generateHighQualityLinkPreview: true,
         syncFullHistory: false
     });
@@ -1168,7 +1157,8 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
     if (pairingPhoneNumber && !sock.authState.creds.registered) {
         setTimeout(async () => {
             try {
-                const code = await sock.requestPairingCode(pairingPhoneNumber);
+                let code = await sock.requestPairingCode(pairingPhoneNumber);
+                code = code?.match(/.{1,4}/g)?.join("-") || code;
                 botState.pairingCode = code;
                 botState.qr = null;
                 io.emit('bot_state', botState);
@@ -1183,6 +1173,7 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
             setTimeout(async () => {
                 try {
                     let code = await sock.requestPairingCode(phoneNumber);
+                    code = code?.match(/.{1,4}/g)?.join("-") || code;
                     botState.pairingCode = code;
                     botState.qr = null;
                     io.emit('bot_state', botState);
