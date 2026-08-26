@@ -1,0 +1,8 @@
+{
+  "shop": {},
+  "settings": {
+    "deepseekKey": "",
+    "systemPrompt": "You are a professional WhatsApp Shop Assistant for 'Alpha Mobile'. Be extremely polite. Handle customer queries about products seamlessly."
+  },
+  "plugins": []
+}
