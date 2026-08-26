@@ -1178,7 +1178,7 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
     const msgRetryCounterCache = new NodeCache();
 
     const sock = makeWASocket({
-        logger: pino({ level: 'info' }, fs.createWriteStream('/app/applet/wa.log')),
+        logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
         auth: {
             creds: state.creds,
