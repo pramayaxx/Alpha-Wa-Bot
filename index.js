@@ -150,92 +150,91 @@ function loadPlugins(sock, msg, sessionId) {
 
 // --- WHATSAPP CORE ---
 async function connectToWhatsApp(sessionId = 'default', pairingPhoneNumber = null) {
-    const { state, saveCreds } = await useMultiFileAuthState(`auth_info_${sessionId}`);
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState(`auth_info_${sessionId}`);
 
-    const { version } = await fetchLatestBaileysVersion();
-    const sock = makeWASocket({
-        version,
-        logger: pino({ level: 'silent' }),
-        printQRInTerminal: false,
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
-        },
-        browser: Browsers.macOS('Desktop'),
-        markOnlineOnConnect: true,
-        syncFullHistory: false,
-        keepAliveIntervalMs: 30000,
-        retryRequestDelayMs: 5000,
-        maxMsgRetryCount: 5,
-        defaultQueryTimeoutMs: 60000
-    });
+        const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1043857760] }));
+        const sock = makeWASocket({
+            version,
+            logger: pino({ level: 'silent' }),
+            printQRInTerminal: false,
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
+            },
+            browser: Browsers.ubuntu('Chrome'),
+            markOnlineOnConnect: true,
+            syncFullHistory: false,
+            keepAliveIntervalMs: 30000,
+            retryRequestDelayMs: 5000,
+            maxMsgRetryCount: 5,
+            defaultQueryTimeoutMs: 60000
+        });
 
-    activeSessions.set(sessionId, sock);
-    let pairingCodeRequested = false;
+        sock.sessionId = sessionId;
+        sock.pairingPhone = pairingPhoneNumber;
+        activeSessions.set(sessionId, sock);
+        let pairingCodeRequested = false;
 
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        
-        if (qr) {
-            console.log(`[WA] QR Code generated for ${sessionId}. Length: ${qr.length}`);
-            if (pairingPhoneNumber && !pairingCodeRequested && !sock.authState.creds.registered) {
-                pairingCodeRequested = true;
-                try {
-                    await new Promise(r => setTimeout(r, 2000));
-                    let code = await sock.requestPairingCode(pairingPhoneNumber);
-                    getBotState(sessionId).pairingCode = code;
-                    getBotState(sessionId).qr = null;
-                    setBotState(sessionId, {});
-                } catch(e) {
-                    getBotState(sessionId).pairingCode = 'ERROR';
-                    getBotState(sessionId).pairingError = e.message;
-                    setBotState(sessionId, {});
+        // If pairing phone number is provided, trigger pairing code request after socket initializes
+        if (pairingPhoneNumber && !sock.authState.creds.registered) {
+            setTimeout(async () => {
+                if (activeSessions.get(sessionId) !== sock) return;
+                if (!pairingCodeRequested && !sock.authState.creds.registered) {
+                    pairingCodeRequested = true;
+                    try {
+                        let code = await sock.requestPairingCode(pairingPhoneNumber);
+                        code = code?.match(/.{1,4}/g)?.join("-") || code;
+                        console.log(`[WA] Pairing code generated for ${sessionId} (${pairingPhoneNumber}): ${code}`);
+                        setBotState(sessionId, { pairingCode: code, pairedPhone: pairingPhoneNumber, qr: null, status: 'pairing', pairingError: null });
+                    } catch (e) {
+                        console.error(`[WA] Pairing code request error for ${sessionId}:`, e.message);
+                        setBotState(sessionId, { pairingCode: 'ERROR', pairingError: e.message, status: 'error' });
+                    }
                 }
-            } else if (!pairingPhoneNumber) {
-                getBotState(sessionId).qr = qr;
-                setBotState(sessionId, {});
-            }
+            }, 2500);
         }
 
-        if(connection === 'close') {
-            getBotState(sessionId).status = 'offline';
-            setBotState(sessionId, {});
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+        sock.ev.on('connection.update', async (update) => {
+            if (activeSessions.get(sessionId) !== sock) return;
+            const { connection, lastDisconnect, qr } = update;
             
-            if (activeSessions.get(sessionId)) {
-                activeSessions.get(sessionId).ev.removeAllListeners();
+            if (qr && !pairingPhoneNumber && !sock.authState.creds.registered) {
+                console.log(`[WA] QR Code generated for ${sessionId}. Length: ${qr.length}`);
+                setBotState(sessionId, { qr: qr, pairingCode: null, status: 'connecting' });
+            }
+
+            if (connection === 'close') {
+                if (activeSessions.get(sessionId) !== sock) return;
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut && !sock.isExplicitClosed;
+                
                 activeSessions.delete(sessionId);
-            }
 
-            if(shouldReconnect) {
-                setTimeout(() => connectToWhatsApp(sessionId), 3000); 
-            } else {
-                getBotState(sessionId).qr = null;
-                getBotState(sessionId).pairingCode = null;
-                setBotState(sessionId, {});
-            }
-        } else if(connection === 'open') {
-            getBotState(sessionId).status = 'online';
-            getBotState(sessionId).qr = null;
-            getBotState(sessionId).pairingCode = null;
-            setBotState(sessionId, {});
-            
-            const db = readDB();
-            let welcomeMsg = db.settings?.deviceWelcomeMsg || `🚀 *ALPHA SHOP & AI ACTIVE* 🚀\n\nYour WhatsApp is now successfully connected!\n\n👤 *Session ID:* {session_id}\n🤖 *AI Engine:* DeepSeek\n🛒 *Shop Systems:* Online\n✅ *Status:* Active & Secured\n\n_Powered by ALPHA MOBILE_`;
-            welcomeMsg = welcomeMsg.replace('{session_id}', sessionId);
+                if (shouldReconnect) {
+                    setBotState(sessionId, { status: 'offline' });
+                    setTimeout(() => connectToWhatsApp(sessionId), 3000); 
+                } else {
+                    setBotState(sessionId, { status: 'offline', qr: null, pairingCode: null });
+                }
+            } else if (connection === 'open') {
+                setBotState(sessionId, { status: 'online', qr: null, pairingCode: null, pairingError: null });
+                
+                const db = readDB();
+                let welcomeMsg = db.settings?.deviceWelcomeMsg || `🚀 *ALPHA SHOP & AI ACTIVE* 🚀\n\nYour WhatsApp is now successfully connected!\n\n👤 *Session ID:* {session_id}\n🤖 *AI Engine:* DeepSeek\n🛒 *Shop Systems:* Online\n✅ *Status:* Active & Secured\n\n_Powered by ALPHA MOBILE_`;
+                welcomeMsg = welcomeMsg.replace('{session_id}', sessionId);
 
-            try {
-                const myJid = jidNormalizedUser(sock.user.id);
-                await sock.sendMessage(myJid, { text: welcomeMsg });
-                console.log(`[SYSTEM] Welcome message sent to ${myJid}`);
-            } catch (err) {
-                console.error('[SYSTEM] Failed to send welcome message', err);
+                try {
+                    const myJid = jidNormalizedUser(sock.user.id);
+                    await sock.sendMessage(myJid, { text: welcomeMsg });
+                    console.log(`[SYSTEM] Welcome message sent to ${myJid}`);
+                } catch (err) {
+                    console.error('[SYSTEM] Failed to send welcome message', err);
+                }
             }
-        }
-    });
+        });
 
-    sock.ev.on('creds.update', saveCreds);
+        sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('messages.upsert', async (m) => {
         if (m.type !== 'notify') return;
@@ -466,6 +465,10 @@ async function connectToWhatsApp(sessionId = 'default', pairingPhoneNumber = nul
             console.error("Failed to send AI message", err);
         }
     });
+    } catch (err) {
+        console.error(`[WA] connectToWhatsApp failed for ${sessionId}:`, err.message);
+        setBotState(sessionId, { status: 'offline', pairingError: err.message });
+    }
 }
 
 // --- API ROUTES ---
@@ -516,33 +519,40 @@ app.post('/api/pair', async (req, res) => {
         
         let cleanNumber = phone ? phone.replace(/[^0-9]/g, '') : '';
         if (cleanNumber.startsWith('00')) cleanNumber = cleanNumber.substring(2);
-        if (cleanNumber.startsWith('0')) cleanNumber = '94' + cleanNumber.substring(1);
+        if (cleanNumber.startsWith('0')) {
+            cleanNumber = '94' + cleanNumber.substring(1);
+        } else if (cleanNumber.length === 9 && cleanNumber.startsWith('7')) {
+            cleanNumber = '94' + cleanNumber;
+        }
+
+        if (!cleanNumber || cleanNumber.length < 8) {
+            return res.status(400).json({ error: 'Please enter a valid phone number with country code.' });
+        }
         
-        bState.pairingCode = 'GENERATING...';
-        bState.qr = null;
-        setBotState(sessionId, {});
+        setBotState(sessionId, { pairingCode: 'GENERATING...', qr: null, pairingError: null, pairedPhone: cleanNumber, status: 'connecting' });
         
         let sock = activeSessions.get(sessionId);
         if (sock) {
-            try { sock.ev.removeAllListeners(); sock.ws.close(); } catch(e){}
+            sock.isExplicitClosed = true;
+            try { sock.ev.removeAllListeners(); sock.ws?.close(); } catch(e){}
             activeSessions.delete(sessionId);
         }
         
         if (fs.existsSync(`auth_info_${sessionId}`)) fs.rmSync(`auth_info_${sessionId}`, { recursive: true, force: true });
         
-        setTimeout(() => connectToWhatsApp(sessionId, cleanNumber), 1000);
+        setTimeout(() => connectToWhatsApp(sessionId, cleanNumber), 600);
         
         let attempts = 0;
         const checkCode = setInterval(() => {
             const currentCode = getBotState(sessionId).pairingCode;
             if (currentCode && currentCode !== 'GENERATING...') {
                 clearInterval(checkCode);
-                if (currentCode === 'ERROR') return res.status(500).json({ error: getBotState(sessionId).pairingError });
-                return res.json({ success: true, code: currentCode });
+                if (currentCode === 'ERROR') return res.status(500).json({ error: getBotState(sessionId).pairingError || 'Pairing error' });
+                return res.json({ success: true, code: currentCode, phoneNumber: cleanNumber });
             }
             if (++attempts > 30) {
                 clearInterval(checkCode);
-                res.status(500).json({ error: 'Timeout' });
+                res.status(500).json({ error: 'Timeout waiting for pairing code from WhatsApp' });
             }
         }, 500);
     } catch (error) {
@@ -555,14 +565,11 @@ app.post('/api/logout', async (req, res) => {
     if (fs.existsSync(`auth_info_${sessionId}`)) {
         fs.rmSync(`auth_info_${sessionId}`, { recursive: true, force: true });
     }
-    const bState = getBotState(sessionId);
-    bState.status = 'offline';
-    bState.qr = null;
-    bState.pairingCode = null;
-    setBotState(sessionId, {});
+    setBotState(sessionId, { status: 'offline', qr: null, pairingCode: null, pairingError: null });
     
     let sock = activeSessions.get(sessionId);
     if (sock) {
+        sock.isExplicitClosed = true;
         try { 
             sock.ev.removeAllListeners(); 
             await sock.logout().catch(() => {});
@@ -570,7 +577,23 @@ app.post('/api/logout', async (req, res) => {
         } catch(e){}
         activeSessions.delete(sessionId);
     }
-    setTimeout(() => connectToWhatsApp(sessionId), 2000);
+    setTimeout(() => connectToWhatsApp(sessionId), 1500);
+    res.json({ success: true });
+});
+
+app.post('/api/qr/refresh', (req, res) => {
+    const { sessionId = 'default' } = req.body;
+    let sock = activeSessions.get(sessionId);
+    if (sock) {
+        sock.isExplicitClosed = true;
+        try { sock.ev.removeAllListeners(); sock.end(new Error('Refresh QR')); } catch(e){}
+        activeSessions.delete(sessionId);
+    }
+    if (fs.existsSync(`auth_info_${sessionId}`)) {
+        fs.rmSync(`auth_info_${sessionId}`, { recursive: true, force: true });
+    }
+    setBotState(sessionId, { status: 'connecting', qr: null, pairingCode: null, pairingError: null });
+    setTimeout(() => connectToWhatsApp(sessionId), 800);
     res.json({ success: true });
 });
 
@@ -579,18 +602,15 @@ app.post('/api/reset', (req, res) => {
     if (fs.existsSync(`auth_info_${sessionId}`)) {
         fs.rmSync(`auth_info_${sessionId}`, { recursive: true, force: true });
     }
-    const bState = getBotState(sessionId);
-    bState.status = 'offline';
-    bState.qr = null;
-    bState.pairingCode = null;
-    setBotState(sessionId, {});
+    setBotState(sessionId, { status: 'offline', qr: null, pairingCode: null, pairingError: null });
     
     let sock = activeSessions.get(sessionId);
     if (sock) {
+        sock.isExplicitClosed = true;
         try { sock.ev.removeAllListeners(); sock.end(new Error('Reset')); } catch(e){}
         activeSessions.delete(sessionId);
     }
-    setTimeout(() => connectToWhatsApp(sessionId), 2000);
+    setTimeout(() => connectToWhatsApp(sessionId), 1200);
     res.json({ success: true });
 });
 

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { io } from 'socket.io-client';
-import { Clock, ShoppingCart, Smartphone, Plus, Bot, Puzzle, RefreshCcw, Check, Terminal, PlayCircle, Shield, Lock, LogOut, MessageSquare, Sparkles, Save, Server, Code, LayoutDashboard, Package, TrendingUp, Users, PauseCircle, Play, Image as ImageIcon, Mic } from 'lucide-react';
+import { Clock, ShoppingCart, Smartphone, Plus, Bot, Puzzle, RefreshCcw, Check, Terminal, PlayCircle, Shield, Lock, LogOut, MessageSquare, Sparkles, Save, Server, Code, LayoutDashboard, Package, TrendingUp, Users, PauseCircle, Play, Image as ImageIcon, Mic, Copy, CheckCheck, QrCode, KeyRound, AlertCircle, Wifi, WifiOff, Send } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 
 const socket = io();
@@ -39,43 +39,90 @@ export default function App() {
   const [sessionId, setSessionId] = useState('default');
 
 
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [isRefreshingQR, setIsRefreshingQR] = useState(false);
+
   useEffect(() => {
     if (isDarkMode) document.documentElement.classList.add('dark');
     else document.documentElement.classList.remove('dark');
   }, [isDarkMode]);
 
   const loadData = () => {
-    fetch(`/api/state?sessionId=${sessionId}`).then(r => r.json()).then(data => setBotState(prev => ({ ...prev, ...data })));
-    fetch('/api/config').then(r => r.json()).then(setConfig);
-    fetch('/api/plugins').then(r => r.json()).then(setPlugins);
-    fetch('/api/shop/products').then(r => r.json()).then(setProducts);
-    fetch('/api/shop/customers').then(r => r.json()).then(setCustomers);
-    fetch('/api/shop/orders').then(r => r.json()).then(setOrders);
-    fetch("/api/sessions").then(r => r.json()).then(setSessions);
-  }
+    fetch(`/api/state?sessionId=${sessionId}`)
+      .then(r => r.json())
+      .then(data => setBotState(prev => ({ ...prev, ...data })))
+      .catch(() => {});
+    fetch('/api/config').then(r => r.json()).then(setConfig).catch(() => {});
+    fetch('/api/plugins').then(r => r.json()).then(setPlugins).catch(() => {});
+    fetch('/api/shop/products').then(r => r.json()).then(setProducts).catch(() => {});
+    fetch('/api/shop/customers').then(r => r.json()).then(setCustomers).catch(() => {});
+    fetch('/api/shop/orders').then(r => r.json()).then(setOrders).catch(() => {});
+    fetch("/api/sessions").then(r => r.json()).then(setSessions).catch(() => {});
+  };
 
   useEffect(() => {
     loadData();
-    socket.on(`bot_state_${sessionId}`, data => setBotState(prev => ({ ...prev, ...data })));
-    return () => { socket.off(`bot_state_${sessionId}`); };
+    // Realtime Polling fallback every 2 seconds for QR / Pairing updates
+    const timer = setInterval(() => {
+      fetch(`/api/state?sessionId=${sessionId}`)
+        .then(r => r.json())
+        .then(data => setBotState(prev => ({ ...prev, ...data })))
+        .catch(() => {});
+    }, 2000);
+
+    const onStateUpdate = (data: any) => setBotState(prev => ({ ...prev, ...data }));
+    socket.on(`bot_state_${sessionId}`, onStateUpdate);
+
+    return () => {
+      clearInterval(timer);
+      socket.off(`bot_state_${sessionId}`, onStateUpdate);
+    };
   }, [sessionId]);
 
   const requestPairingCode = async () => {
-    if (!phoneInput) return alert("Enter valid WhatsApp number");
-    setBotState(prev => ({ ...prev, pairingCode: 'GENERATING...' }));
-    const res = await fetch('/api/pair', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone: phoneInput, sessionId })
-    });
-    const data = await res.json();
-    if (data.code) setBotState(prev => ({ ...prev, pairingCode: data.code }));
-    else setBotState(prev => ({ ...prev, pairingCode: 'ERROR', pairingError: data.error }));
+    if (!phoneInput) return alert("Please enter your WhatsApp phone number (e.g., 94771234567)");
+    setBotState(prev => ({ ...prev, pairingCode: 'GENERATING...', pairingError: null }));
+    try {
+      const res = await fetch('/api/pair', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: phoneInput, sessionId })
+      });
+      const data = await res.json();
+      if (data.code) setBotState(prev => ({ ...prev, pairingCode: data.code }));
+      else setBotState(prev => ({ ...prev, pairingCode: 'ERROR', pairingError: data.error || 'Failed to get code' }));
+    } catch (e: any) {
+      setBotState(prev => ({ ...prev, pairingCode: 'ERROR', pairingError: e.message }));
+    }
+  };
+
+  const refreshQR = async () => {
+    setIsRefreshingQR(true);
+    try {
+      await fetch('/api/qr/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId })
+      });
+      setTimeout(() => {
+        loadData();
+        setIsRefreshingQR(false);
+      }, 1000);
+    } catch (e) {
+      setIsRefreshingQR(false);
+    }
+  };
+
+  const copyPairingCode = (code: string) => {
+    navigator.clipboard.writeText(code);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2500);
   };
 
   const resetSession = async () => {
-    if(confirm('Are you sure you want to reset the entire session?')) {
+    if(confirm('Are you sure you want to reset and restart this WhatsApp connection?')) {
       setBotState(prev => ({ ...prev, qr: null, pairingCode: null }));
       await fetch('/api/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId }) });
+      setTimeout(loadData, 2000);
     }
   };
 
@@ -258,72 +305,279 @@ export default function App() {
             
             {activeTab === 'connection' && (
               <div className="space-y-6">
-                <div className="flex justify-between items-center mb-6 border-b dark:border-slate-800 pb-4">
-                  <h3 className="text-xl font-bold flex items-center gap-2"><Smartphone size={24} className="text-indigo-500" /> Staff WhatsApp Accounts ({sessions.length}/10)</h3>
+                {/* Session Tabs & Header */}
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white dark:bg-slate-900 p-6 rounded-2xl border dark:border-slate-800 shadow-sm">
+                  <div>
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/50 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                        <Smartphone size={22} />
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-bold">WhatsApp Connection Hub</h3>
+                        <p className="text-xs text-slate-500">Manage up to 10 multi-device staff numbers for Alpha Mobile</p>
+                      </div>
+                    </div>
+                  </div>
                   <button 
                     onClick={async () => {
                       if(sessions.length >= 10) return alert('Max 10 devices reached');
-                      const newId = prompt('Enter a unique name for the new device (e.g., staff-nimal, sales-rep):');
+                      const newId = prompt('Enter a unique ID for the new staff account (e.g., staff-02, support-desk):');
                       if(!newId) return;
-                      const res = await fetch('/api/sessions/add', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ sessionId: newId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '') }) });
+                      const cleanId = newId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+                      if(!cleanId) return alert('Please enter a valid alphanumeric name');
+                      const res = await fetch('/api/sessions/add', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ sessionId: cleanId }) });
                       const data = await res.json();
-                      if(data.success) { setSessions(data.sessions); setSessionId(newId); } else { alert(data.error); }
+                      if(data.success) { setSessions(data.sessions); setSessionId(cleanId); } else { alert(data.error); }
                     }} 
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg flex items-center gap-2 text-sm font-bold"
+                    className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl flex items-center gap-2 text-sm font-bold shadow-md shadow-indigo-500/20 transition-all cursor-pointer"
                   >
-                    <Plus size={16} /> Link Staff Device
+                    <Plus size={16} /> Link New Device
                   </button>
                 </div>
                 
-                <div className="flex gap-4 mb-6 overflow-x-auto pb-2">
-                  {sessions.map(s => (
-                    <button 
-                      key={s} 
-                      onClick={() => setSessionId(s)} 
-                      className={`px-6 py-3 rounded-xl font-bold whitespace-nowrap transition-all ${sessionId === s ? 'bg-indigo-600 text-white shadow-lg' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
-                    >
-                      {s.toUpperCase()}
-                    </button>
-                  ))}
+                {/* Device Selector Pills */}
+                <div className="flex gap-3 overflow-x-auto pb-1">
+                  {sessions.map(s => {
+                    const isSelected = sessionId === s;
+                    const isCurOnline = isSelected && botState.status === 'online';
+                    return (
+                      <button 
+                        key={s} 
+                        onClick={() => setSessionId(s)} 
+                        className={`flex items-center gap-2.5 px-5 py-3 rounded-xl font-bold text-sm transition-all border ${
+                          isSelected 
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-600/25' 
+                            : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:border-indigo-300'
+                        }`}
+                      >
+                        <span className={`w-2.5 h-2.5 rounded-full ${isCurOnline ? 'bg-emerald-400 animate-pulse' : isSelected ? 'bg-amber-300' : 'bg-slate-400'}`}></span>
+                        <span>{s.toUpperCase()}</span>
+                      </button>
+                    );
+                  })}
                 </div>
 
-                <div className="bg-white dark:bg-slate-900 p-8 rounded-2xl border shadow-sm flex flex-col items-center">
-                  <h3 className="text-xl font-bold mb-8 flex items-center gap-2">Connect Staff WhatsApp: <span className="text-indigo-500">{sessionId.toUpperCase()}</span></h3>
+                {/* Main Card */}
+                <div className="bg-white dark:bg-slate-900 p-6 md:p-8 rounded-2xl border dark:border-slate-800 shadow-sm">
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-6 border-b dark:border-slate-800 mb-8">
+                    <div>
+                      <div className="flex items-center gap-2 text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                        Current Session
+                      </div>
+                      <h4 className="text-2xl font-black flex items-center gap-3">
+                        <span>Device: <span className="text-indigo-600 dark:text-indigo-400">{sessionId.toUpperCase()}</span></span>
+                      </h4>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      {botState.status === 'online' ? (
+                        <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 rounded-xl text-xs font-black uppercase tracking-wider border border-emerald-200 dark:border-emerald-900/50">
+                          <Wifi size={14} className="animate-pulse" /> Bot Online & Active
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 px-4 py-2 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 rounded-xl text-xs font-black uppercase tracking-wider border border-amber-200 dark:border-amber-900/50">
+                          <WifiOff size={14} /> Ready To Connect
+                        </div>
+                      )}
+
+                      <button 
+                        onClick={resetSession} 
+                        title="Restart connection process"
+                        className="p-2 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                      >
+                        <RefreshCcw size={18} />
+                      </button>
+                    </div>
+                  </div>
+
                   {botState.status === 'online' ? (
-                    <div className="text-center py-10">
-                      <Check size={64} className="mx-auto text-emerald-500 mb-6 bg-emerald-100 dark:bg-emerald-900/30 p-4 rounded-full"/> 
-                      <h2 className="text-2xl font-bold mb-2">Connected Successfully!</h2>
-                      <p className="text-slate-500 mb-8">This device is actively sending and receiving messages.</p>
-                      <button onClick={async () => {
-                          if(confirm('Logout this device?')) {
+                    <div className="text-center py-8">
+                      <div className="w-20 h-20 bg-emerald-100 dark:bg-emerald-950/50 text-emerald-600 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-emerald-500/10">
+                        <Check size={40} className="stroke-[3]" />
+                      </div>
+                      <h3 className="text-2xl font-bold mb-2">WhatsApp Device is Connected!</h3>
+                      <p className="text-slate-500 text-sm max-w-md mx-auto mb-8">
+                        The Alpha Mobile Bot engine is actively running on session <b>{sessionId}</b>. Auto-replies, product inquiries, and automated invoice generations are live.
+                      </p>
+
+                      <div className="flex justify-center gap-4">
+                        <button 
+                          onClick={async () => {
+                            if(confirm(`Logout session "${sessionId}"?`)) {
                               await fetch('/api/logout', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ sessionId }) });
-                              setTimeout(loadData, 2000);
-                          }
-                      }} className="px-6 py-2 border border-rose-200 text-rose-500 rounded-lg hover:bg-rose-50 font-bold">Logout Account</button>
-                      {sessionId !== 'default' && (
-                        <button onClick={async () => {
-                            if(confirm('Delete this device permanently?')) {
+                              setTimeout(loadData, 1500);
+                            }
+                          }} 
+                          className="px-6 py-2.5 border border-rose-200 dark:border-rose-900/50 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl font-bold text-sm transition-colors cursor-pointer"
+                        >
+                          Logout Device
+                        </button>
+                        {sessionId !== 'default' && (
+                          <button 
+                            onClick={async () => {
+                              if(confirm(`Delete session "${sessionId}" permanently?`)) {
                                 const res = await fetch('/api/sessions/remove', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ sessionId }) });
                                 const data = await res.json();
                                 if(data.success) { setSessions(data.sessions); setSessionId('default'); }
-                            }
-                        }} className="px-6 py-2 ml-4 bg-rose-600 text-white rounded-lg hover:bg-rose-700 font-bold">Remove Account</button>
-                      )}
+                              }
+                            }} 
+                            className="px-6 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-sm shadow-md transition-colors cursor-pointer"
+                          >
+                            Remove Device
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ) : (
-                    <div className="w-full max-w-4xl flex flex-col md:flex-row gap-12 items-center">
-                      <div className="flex-1 w-full">
-                        <label className="block text-sm mb-2 font-bold text-slate-700 dark:text-slate-300">Link with Phone Number</label>
-                        <input value={phoneInput} onChange={e => setPhoneInput(e.target.value)} placeholder="9470000000" className="w-full p-4 rounded-xl border-2 dark:border-slate-700 mb-4 bg-transparent focus:border-indigo-500 outline-none transition-colors font-mono text-lg" />
-                        <button onClick={requestPairingCode} className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-lg shadow-lg shadow-indigo-600/30 transition-all">Get Pairing Code</button>
-                        {botState.pairingCode && <div className="mt-6 p-6 text-center text-4xl font-mono tracking-widest bg-slate-100 dark:bg-slate-800 rounded-xl font-bold text-indigo-600 border border-indigo-200 dark:border-indigo-900/50">{botState.pairingCode}</div>}
-                        {botState.pairingError && <div className="mt-4 p-4 text-rose-500 text-center text-sm font-bold bg-rose-50 dark:bg-rose-900/20 rounded-lg border border-rose-200">{botState.pairingError}</div>}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+                      {/* Method 1: Pairing Code */}
+                      <div className="bg-slate-50 dark:bg-slate-800/40 p-6 rounded-2xl border border-slate-200/80 dark:border-slate-800 flex flex-col justify-between h-full">
+                        <div>
+                          <div className="flex items-center gap-2.5 text-indigo-600 dark:text-indigo-400 font-bold mb-3">
+                            <KeyRound size={18} />
+                            <span>Method 1: Link with Phone Number (8-Digit Code)</span>
+                          </div>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
+                            Connect directly without scanning a camera QR code. Enter your WhatsApp number:
+                          </p>
+
+                          <div className="space-y-3">
+                            <div>
+                              <input 
+                                value={phoneInput} 
+                                onChange={e => setPhoneInput(e.target.value)} 
+                                placeholder="e.g. 0771234567 or 94771234567" 
+                                className="w-full px-4 py-3.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none font-mono text-base transition-all" 
+                              />
+                              {phoneInput && (
+                                <div className="mt-1.5 flex items-center justify-between text-xs text-slate-500">
+                                  <span>WhatsApp target number:</span>
+                                  <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                                    +{phoneInput.replace(/[^0-9]/g, '').startsWith('0') ? '94' + phoneInput.replace(/[^0-9]/g, '').substring(1) : (phoneInput.replace(/[^0-9]/g, '').length === 9 && phoneInput.replace(/[^0-9]/g, '').startsWith('7') ? '94' + phoneInput.replace(/[^0-9]/g, '') : phoneInput.replace(/[^0-9]/g, ''))}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+
+                            <button 
+                              onClick={requestPairingCode} 
+                              disabled={botState.pairingCode === 'GENERATING...'}
+                              className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold text-sm shadow-md shadow-indigo-500/20 transition-all cursor-pointer flex items-center justify-center gap-2"
+                            >
+                              {botState.pairingCode === 'GENERATING...' ? (
+                                <>
+                                  <RefreshCcw size={16} className="animate-spin" />
+                                  <span>Requesting Code from WhatsApp...</span>
+                                </>
+                              ) : (
+                                <span>{botState.pairingCode && botState.pairingCode !== 'ERROR' ? 'Request Fresh Code' : 'Get 8-Digit Pairing Code'}</span>
+                              )}
+                            </button>
+                          </div>
+
+                          {/* Code Display Area */}
+                          {botState.pairingCode && botState.pairingCode !== 'GENERATING...' && botState.pairingCode !== 'ERROR' && (
+                            <div className="mt-5 p-5 bg-indigo-50/80 dark:bg-indigo-950/40 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 text-center">
+                              <div className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 mb-2">
+                                Enter this code in WhatsApp on your phone:
+                              </div>
+                              
+                              {/* Character Boxes */}
+                              <div className="flex items-center justify-center gap-1.5 sm:gap-2 my-3 select-all">
+                                {botState.pairingCode.replace(/[^A-Za-z0-9]/g, '').split('').map((char: string, i: number) => (
+                                  <React.Fragment key={i}>
+                                    {i === 4 && <span className="text-xl font-bold text-slate-400 mx-0.5 sm:mx-1">-</span>}
+                                    <div className="w-8 h-10 sm:w-10 sm:h-12 bg-white dark:bg-slate-900 border-2 border-indigo-500/70 rounded-lg flex items-center justify-center font-mono font-black text-xl sm:text-2xl text-indigo-600 dark:text-indigo-400 shadow-sm">
+                                      {char}
+                                    </div>
+                                  </React.Fragment>
+                                ))}
+                              </div>
+
+                              <div className="text-[12px] text-slate-600 dark:text-slate-400 mb-3">
+                                <b>Raw Code:</b> <span className="font-mono font-bold tracking-widest text-indigo-600 dark:text-indigo-400">{botState.pairingCode}</span>
+                              </div>
+
+                              <div className="flex items-center justify-center gap-3">
+                                <button 
+                                  onClick={() => copyPairingCode(botState.pairingCode!)}
+                                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow-sm hover:bg-indigo-700 transition-colors cursor-pointer"
+                                >
+                                  {copiedCode ? <CheckCheck size={14} /> : <Copy size={14} />}
+                                  <span>{copiedCode ? 'Copied to Clipboard!' : 'Copy Code'}</span>
+                                </button>
+                                <button 
+                                  onClick={requestPairingCode}
+                                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold border border-slate-200 dark:border-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                                >
+                                  <RefreshCcw size={13} />
+                                  <span>New Code</span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {botState.pairingError && (
+                            <div className="mt-4 p-3 bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 rounded-xl border border-rose-200 dark:border-rose-900 text-xs font-medium flex items-center gap-2">
+                              <AlertCircle size={16} className="shrink-0" />
+                              <span>{botState.pairingError}</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Step Instructions */}
+                        <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-800 text-[12px] text-slate-500 space-y-1.5">
+                          <p className="font-bold text-slate-700 dark:text-slate-300">Important linking steps:</p>
+                          <p>1. Make sure you open WhatsApp on the phone with the <b>exact phone number</b> you typed above.</p>
+                          <p>2. Tap <b>⋮</b> or <b>Settings</b> &gt; <b>Linked Devices</b> &gt; <b>Link a Device</b>.</p>
+                          <p>3. Tap <b>"Link with phone number instead"</b> at the bottom of the QR scanner.</p>
+                          <p>4. Type the 8 letters shown in the boxes above.</p>
+                        </div>
                       </div>
-                      <div className="w-full md:w-px h-px md:h-64 bg-slate-200 dark:bg-slate-800"></div>
-                      <div className="flex-1 w-full text-center flex flex-col items-center">
-                        <p className="mb-6 font-bold text-slate-700 dark:text-slate-300">Or Scan QR Code</p>
-                        {botState.qr ? <div className="inline-block p-6 bg-white rounded-2xl shadow-lg border"><QRCodeSVG value={botState.qr} size={240}/></div> : <div className="h-[240px] w-[240px] mx-auto flex items-center justify-center text-slate-400 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl bg-slate-50 dark:bg-slate-800/50 font-medium">Waiting for QR...</div>}
-                        <button onClick={resetSession} className="mt-4 px-4 py-2 text-sm text-slate-500 hover:text-slate-800 dark:hover:text-slate-300 transition-colors">↻ Restart Connection</button>
+
+                      {/* Method 2: QR Code */}
+                      <div className="bg-slate-50 dark:bg-slate-800/40 p-6 rounded-2xl border border-slate-200/80 dark:border-slate-800 flex flex-col justify-between items-center text-center h-full">
+                        <div className="w-full">
+                          <div className="flex items-center justify-center gap-2 text-indigo-600 dark:text-indigo-400 font-bold mb-3">
+                            <QrCode size={18} />
+                            <span>Method 2: Scan QR Code</span>
+                          </div>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mb-6">
+                            Point your WhatsApp camera scanner at this QR code to connect instantly:
+                          </p>
+
+                          <div className="flex justify-center mb-5">
+                            {botState.qr ? (
+                              <div className="p-4 bg-white rounded-2xl shadow-md border border-slate-200 inline-block">
+                                <QRCodeSVG value={botState.qr} size={220} level="M" />
+                              </div>
+                            ) : (
+                              <div className="w-[220px] h-[220px] rounded-2xl border-2 border-dashed border-slate-300 dark:border-slate-700 flex flex-col items-center justify-center bg-white/60 dark:bg-slate-900/60 p-4">
+                                <RefreshCcw size={28} className="text-slate-400 animate-spin mb-3" />
+                                <span className="text-xs font-semibold text-slate-500">Generating Live QR...</span>
+                                <span className="text-[11px] text-slate-400 mt-1">Please wait a moment</span>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex items-center justify-center gap-3">
+                            <button 
+                              onClick={refreshQR} 
+                              disabled={isRefreshingQR}
+                              className="inline-flex items-center gap-1.5 px-4 py-2 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold border border-slate-200 dark:border-slate-700 shadow-xs transition-colors cursor-pointer"
+                            >
+                              <RefreshCcw size={14} className={isRefreshingQR ? 'animate-spin' : ''} />
+                              <span>{isRefreshingQR ? 'Refreshing...' : 'Refresh QR Code'}</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Step Instructions */}
+                        <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-800 text-[12px] text-slate-500 text-left w-full space-y-1.5">
+                          <p className="font-bold text-slate-700 dark:text-slate-300">How to scan:</p>
+                          <p>1. Open WhatsApp &gt; <b>Linked Devices</b>.</p>
+                          <p>2. Tap <b>Link a Device</b> and point camera at the QR code above.</p>
+                        </div>
                       </div>
                     </div>
                   )}
