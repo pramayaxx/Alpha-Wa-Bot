@@ -5,7 +5,7 @@ const fs = require('fs');
 const pino = require('pino');
 const { Server } = require('socket.io');
 const PDFDocument = require('pdfkit');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, makeCacheableSignalKeyStore, jidNormalizedUser } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, makeCacheableSignalKeyStore, jidNormalizedUser, fetchLatestBaileysVersion, Browsers } = require('@whiskeysockets/baileys');
 
 const app = express();
 const server = http.createServer(app);
@@ -116,14 +116,16 @@ function loadPlugins(sock, msg, sessionId) {
 async function connectToWhatsApp(sessionId = 'default', pairingPhoneNumber = null) {
     const { state, saveCreds } = await useMultiFileAuthState(`auth_info_${sessionId}`);
 
+    const { version } = await fetchLatestBaileysVersion();
     const sock = makeWASocket({
+        version,
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
         auth: {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
         },
-        browser: ['AlphaBot Server', 'Chrome', '120.0.0.0'],
+        browser: Browsers.macOS('Desktop'),
         markOnlineOnConnect: true,
         syncFullHistory: false,
         keepAliveIntervalMs: 30000,
@@ -139,6 +141,7 @@ async function connectToWhatsApp(sessionId = 'default', pairingPhoneNumber = nul
         const { connection, lastDisconnect, qr } = update;
         
         if (qr) {
+            console.log(`[WA] QR Code generated for ${sessionId}. Length: ${qr.length}`);
             if (pairingPhoneNumber && !pairingCodeRequested && !sock.authState.creds.registered) {
                 pairingCodeRequested = true;
                 try {

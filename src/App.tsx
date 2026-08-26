@@ -263,7 +263,7 @@ export default function App() {
                   <button 
                     onClick={async () => {
                       if(sessions.length >= 10) return alert('Max 10 devices reached');
-                      const newId = prompt('Enter a unique name for the new device (e.g., staff-kamal, sales-rep):');
+                      const newId = prompt('Enter a unique name for the new device (e.g., staff-nimal, sales-rep):');
                       if(!newId) return;
                       const res = await fetch('/api/sessions/add', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ sessionId: newId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '') }) });
                       const data = await res.json();
