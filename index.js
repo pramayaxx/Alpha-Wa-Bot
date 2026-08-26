@@ -2,10 +2,23 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const { execSync } = require('child_process');
 const pino = require('pino');
 const { Server } = require('socket.io');
 const PDFDocument = require('pdfkit');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, makeCacheableSignalKeyStore, jidNormalizedUser, fetchLatestBaileysVersion, Browsers } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, makeCacheableSignalKeyStore, jidNormalizedUser, fetchLatestBaileysVersion, Browsers, downloadMediaMessage } = require('@whiskeysockets/baileys');
+const { GoogleGenAI } = require('@google/genai');
+
+// Ensure dist/index.html is built
+const distIndexPath = path.join(__dirname, 'dist', 'index.html');
+if (!fs.existsSync(distIndexPath)) {
+    try {
+        console.log('[BUILD] dist/index.html not found. Running vite build...');
+        execSync('npx vite build', { stdio: 'inherit' });
+    } catch (e) {
+        console.error('[BUILD] Auto-build failed:', e.message);
+    }
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -47,10 +60,10 @@ function setBotState(sessionId, updates) {
     io.emit(`bot_state_${sessionId}`, state);
 }
 
-// --- DEEPSEEK AI INTEGRATION ---
+// --- AI INTEGRATION (DEEPSEEK & GEMINI) ---
 async function askDeepSeek(prompt, userMsg, sender) {
     const db = readDB();
-    const apiKey = db.settings.deepseekKey;
+    const apiKey = db.settings?.deepseekKey;
     if (!apiKey) return null;
 
     if (!db.chats) db.chats = {};
@@ -79,15 +92,38 @@ async function askDeepSeek(prompt, userMsg, sender) {
         const data = await response.json();
         if (data.choices && data.choices[0]) {
             const reply = data.choices[0].message.content;
-            // Save to memory
-            db.chats[sender].push({ role: 'user', content: userMsg, timestamp: now });
-            db.chats[sender].push({ role: 'assistant', content: reply, timestamp: Date.now() });
-            writeDB(db);
             return reply;
         }
         return null;
     } catch (err) {
         console.error("DeepSeek Error:", err.message);
+        return null;
+    }
+}
+
+async function askGemini(prompt, userMsg, sender, customKey) {
+    const apiKey = customKey || process.env.GEMINI_API_KEY;
+    if (!apiKey) return null;
+    try {
+        const ai = new GoogleGenAI({ apiKey });
+        const db = readDB();
+        const chatHistory = (db.chats && db.chats[sender]) ? db.chats[sender] : [];
+        const contents = [
+            { role: 'user', parts: [{ text: `System Instructions:\n${prompt}` }] },
+            { role: 'model', parts: [{ text: "Understood. I will act as the Alpha Mobile WhatsApp Assistant." }] },
+            ...chatHistory.slice(-6).map(m => ({
+                role: m.role === 'assistant' ? 'model' : 'user',
+                parts: [{ text: m.content }]
+            })),
+            { role: 'user', parts: [{ text: userMsg }] }
+        ];
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: contents
+        });
+        return response.text;
+    } catch (e) {
+        console.error("Gemini AI Error:", e.message);
         return null;
     }
 }
@@ -295,87 +331,139 @@ async function connectToWhatsApp(sessionId = 'default', pairingPhoneNumber = nul
         }
 
         // 2. AI Reply logic
-        if (db.settings.deepseekKey) {
-            try {
-                await sock.sendPresenceUpdate('composing', sender);
-                
-                let aiPrompt = db.settings.systemPrompt;
-                if (db.shop.products && db.shop.products.length > 0) {
-                    const catalog = db.shop.products.map(p => `- ${p.name} (Price: ${p.price}): ${p.details}`).join('\n');
-                    aiPrompt += `\n\nAVAILABLE PRODUCTS:\n${catalog}\n\nUse this product information to answer customer queries.`;
-                }
-                
-                aiPrompt += "\n\nIMPORTANT INSTRUCTIONS:\nIf the user is asking about bulk/wholesale purchasing, append [SEGMENT: WHOLESALE]. If they purchase high value items consistently, append [SEGMENT: VIP]. If they only ask questions and don't buy, append [SEGMENT: WINDOW_SHOPPER].\n\n[MULTI-LANGUAGE ENGINE ACTIVE]:\n1. You must auto-detect the user's language (Sinhala, Singlish, Tamil, or English).\n2. You MUST reply in the EXACT SAME LANGUAGE and dialect they used.\n3. If they type in Singlish (Sinhala words in English alphabet), you MUST reply in natural Singlish.\n4. If they type in Sinhala Unicode or Tamil, reply in the exact same script.\n5. Always mirror their linguistic style naturally.";
-
-                let aiReply = await askDeepSeek(aiPrompt, text);
-                
-                if (aiReply) {
-                    // Check Segments
-                    const segMatch = aiReply.match(/\[SEGMENT:\s*([A-Z_]+)\]/i);
-                    if (segMatch) {
-                        aiReply = aiReply.replace(segMatch[0], '').trim();
-                        cust.segment = segMatch[1];
-                        writeDB(db);
-                    }
-                    
-                    // Create Order Flow
-                    const createMatch = aiReply.match(/\[CREATE_ORDER:\s*(.+?)\s*\|\|\s*(.+?)\s*\|\|\s*(.+?)(?:\s*\|\|\s*(.+?))?\]/i);
-                    if (createMatch) {
-                        aiReply = aiReply.replace(createMatch[0], '').trim();
-                        const productName = createMatch[1].trim();
-                        const customerName = createMatch[2].trim();
-                        const customerAddress = createMatch[3].trim();
-                        const orderId = 'ORD-' + Math.floor(1000 + Math.random() * 9000);
-                        
-                        if(!db.shop.orders) db.shop.orders = [];
-                        const contactNumber = createMatch[4] ? createMatch[4].trim() : sender.split('@')[0];
-                        db.shop.orders.push({ id: orderId, customerJid: sender, customerName, customerAddress, contactNumber, productName, status: 'Processing', date: new Date().toISOString() });
-                        if(!db.analytics) db.analytics = { dailyMessages: {}, popularProducts: {}, totalSales: 0 };
-                        db.analytics.popularProducts[productName] = (db.analytics.popularProducts[productName] || 0) + 1;
-                        db.analytics.totalSales = (db.analytics.totalSales || 0) + 1;
-                        writeDB(db);
-
-                        // Generate Invoice PDF
-                        const pdfPath = path.join(__dirname, orderId + '.pdf');
-                        const doc = new PDFDocument();
-                        doc.pipe(fs.createWriteStream(pdfPath));
-                        doc.fontSize(25).text('ALPHA MOBILE INVOICE', { align: 'center' });
-                        doc.moveDown();
-                        doc.fontSize(14).text(`Order ID: ${orderId}`);
-                        doc.text(`Date: ${new Date().toLocaleString()}`);
-                        doc.moveDown();
-                        doc.text(`Customer Name: ${customerName}`);
-                        doc.text(`Contact Number: ${contactNumber}`);
-                        doc.text(`Delivery Address: ${customerAddress}`);
-                        doc.moveDown();
-                        doc.text(`Product: ${productName}`);
-                        doc.text(`Status: Processing`);
-                        doc.moveDown(2);
-                        doc.text('Thank you for shopping with Alpha Mobile!', { align: 'center' });
-                        doc.end();
-
-                        setTimeout(async () => {
-                            await sock.sendMessage(sender, { text: aiReply || `🎉 Order Confirmed! Your Order ID is *${orderId}*.` });
-                            try {
-                                await sock.sendMessage(sender, { document: fs.readFileSync(pdfPath), mimetype: 'application/pdf', fileName: `Invoice-${orderId}.pdf` });
-                                fs.unlinkSync(pdfPath);
-                            } catch(e) { console.error("PDF Send Error:", e); }
-                        }, 1500);
-                    } else {
-                        await sock.sendMessage(sender, { text: aiReply }, { quoted: msg });
-                    }
-                    
-                    // Save Bot Reply & Emit Live Event
-                    const freshDB = readDB();
-                    if(!freshDB.chats) freshDB.chats = {};
-                    if(!freshDB.chats[sender]) freshDB.chats[sender] = [];
-                    freshDB.chats[sender].push({ role: 'assistant', content: aiReply, timestamp: Date.now() });
-                    writeDB(freshDB);
-                    io.emit('live_message', { to: sender, role: 'assistant', content: aiReply, timestamp: Date.now() });
-                }
-            } catch (err) {
-                console.error("Failed to send AI message", err);
+        try {
+            await sock.sendPresenceUpdate('composing', sender);
+            
+            let aiPrompt = db.settings?.systemPrompt || "You are a helpful assistant for Alpha Mobile.";
+            if (db.shop?.products && db.shop.products.length > 0) {
+                const catalog = db.shop.products.map(p => `- ${p.name} (Price: ${p.price}): ${p.details || 'Available'}`).join('\n');
+                aiPrompt += `\n\nAVAILABLE PRODUCTS:\n${catalog}\n\nUse this product information to answer customer queries.`;
             }
+            
+            aiPrompt += "\n\nIMPORTANT INSTRUCTIONS:\nIf the user is asking about bulk/wholesale purchasing, append [SEGMENT: WHOLESALE]. If they purchase high value items consistently, append [SEGMENT: VIP]. If they only ask questions and don't buy, append [SEGMENT: WINDOW_SHOPPER].\n\n[MULTI-LANGUAGE ENGINE ACTIVE]:\n1. You must auto-detect the user's language (Sinhala, Singlish, Tamil, or English).\n2. You MUST reply in the EXACT SAME LANGUAGE and dialect they used.\n3. If they type in Singlish (Sinhala words in English alphabet), you MUST reply in natural Singlish.\n4. If they type in Sinhala Unicode or Tamil, reply in the exact same script.\n5. Always mirror their linguistic style naturally.";
+
+            let aiReply = null;
+            if (db.settings?.deepseekKey) {
+                aiReply = await askDeepSeek(aiPrompt, text, sender);
+            } else if (db.settings?.geminiKey || process.env.GEMINI_API_KEY) {
+                aiReply = await askGemini(aiPrompt, text, sender, db.settings?.geminiKey);
+            } else {
+                // Built-in intelligent fallback when API keys are not yet added
+                const lower = text.toLowerCase().trim();
+                if (lower === '.ping' || lower === 'ping') {
+                    aiReply = '🏓 Pong! Alpha Mobile Bot is active & online.';
+                } else if (lower.includes('product') || lower.includes('item') || lower.includes('phone') || lower.includes('catalog') || lower.includes('price') || lower.includes('badu')) {
+                    if (db.shop?.products && db.shop.products.length > 0) {
+                        const productList = db.shop.products.map((p, i) => `${i + 1}. *${p.name}* - ${p.price}\n   ${p.details || ''}`).join('\n\n');
+                        aiReply = `📱 *ALPHA MOBILE PRODUCTS*\n\n${productList}\n\nTo place an order, reply with the product name, your full name, delivery address, and contact number!`;
+                    } else {
+                        aiReply = `👋 Hello ${pushName}! Welcome to *Alpha Mobile*.\n\nOur product catalog is currently being updated. How can we help you today?`;
+                    }
+                } else if (lower.startsWith('order') || lower.includes('ord-')) {
+                    const match = text.match(/ORD-\d+/i);
+                    if (match && db.shop?.orders) {
+                        const found = db.shop.orders.find(o => o.id.toLowerCase() === match[0].toLowerCase());
+                        if (found) {
+                            aiReply = `📦 *Order Status for #${found.id}*\n\n• *Product:* ${found.productName}\n• *Customer:* ${found.customerName}\n• *Status:* ${found.status}\n• *Date:* ${new Date(found.date).toLocaleString()}`;
+                        } else {
+                            aiReply = `⚠️ Order *${match[0]}* was not found in our system. Please check the ID and try again.`;
+                        }
+                    } else {
+                        aiReply = `👋 To check your order status, please provide your Order ID (e.g. ORD-1234).\n\nTo place a new order, reply with the product name, your full name, delivery address, and phone number!`;
+                    }
+                } else {
+                    aiReply = `👋 Hello *${pushName}*! Welcome to *Alpha Mobile*.\n\nHow can we help you today? You can ask about our products, prices, or check your orders!\n\n_Type *products* to see our available items._`;
+                }
+            }
+            
+            if (aiReply) {
+                // Check Segments
+                const segMatch = aiReply.match(/\[SEGMENT:\s*([A-Z_]+)\]/i);
+                if (segMatch) {
+                    aiReply = aiReply.replace(segMatch[0], '').trim();
+                    cust.segment = segMatch[1];
+                    writeDB(db);
+                }
+
+                // Check Order Status Lookup tag [CHECK_ORDER: ORD-XXXX]
+                const checkMatch = aiReply.match(/\[CHECK_ORDER:\s*(.+?)\]/i);
+                if (checkMatch) {
+                    const targetId = checkMatch[1].trim();
+                    aiReply = aiReply.replace(checkMatch[0], '').trim();
+                    const existingOrder = db.shop?.orders?.find(o => o.id.toLowerCase() === targetId.toLowerCase());
+                    if (existingOrder) {
+                        aiReply += `\n\n📦 *Order Status for #${existingOrder.id}*:\n• *Product:* ${existingOrder.productName}\n• *Status:* ${existingOrder.status}`;
+                    } else {
+                        aiReply += `\n\n⚠️ Order *${targetId}* was not found in our records.`;
+                    }
+                }
+                
+                // Create Order Flow
+                const createMatch = aiReply.match(/\[CREATE_ORDER:\s*(.+?)\s*\|\|\s*(.+?)\s*\|\|\s*(.+?)(?:\s*\|\|\s*(.+?))?\]/i);
+                if (createMatch) {
+                    aiReply = aiReply.replace(createMatch[0], '').trim();
+                    const productName = createMatch[1].trim();
+                    const customerName = createMatch[2].trim();
+                    const customerAddress = createMatch[3].trim();
+                    const orderId = 'ORD-' + Math.floor(1000 + Math.random() * 9000);
+                    
+                    if(!db.shop.orders) db.shop.orders = [];
+                    const contactNumber = createMatch[4] ? createMatch[4].trim() : sender.split('@')[0];
+                    db.shop.orders.push({ id: orderId, customerJid: sender, customerName, customerAddress, contactNumber, productName, status: 'Processing', date: new Date().toISOString() });
+                    if(!db.analytics) db.analytics = { dailyMessages: {}, popularProducts: {}, totalSales: 0 };
+                    db.analytics.popularProducts[productName] = (db.analytics.popularProducts[productName] || 0) + 1;
+                    db.analytics.totalSales = (db.analytics.totalSales || 0) + 1;
+                    writeDB(db);
+
+                    // Generate Invoice PDF
+                    const pdfPath = path.join(__dirname, orderId + '.pdf');
+                    const doc = new PDFDocument();
+                    doc.pipe(fs.createWriteStream(pdfPath));
+                    doc.fontSize(25).text('ALPHA MOBILE INVOICE', { align: 'center' });
+                    doc.moveDown();
+                    doc.fontSize(14).text(`Order ID: ${orderId}`);
+                    doc.text(`Date: ${new Date().toLocaleString()}`);
+                    doc.moveDown();
+                    doc.text(`Customer Name: ${customerName}`);
+                    doc.text(`Contact Number: ${contactNumber}`);
+                    doc.text(`Delivery Address: ${customerAddress}`);
+                    doc.moveDown();
+                    doc.text(`Product: ${productName}`);
+                    doc.text(`Status: Processing`);
+                    doc.moveDown(2);
+                    doc.text('Thank you for shopping with Alpha Mobile!', { align: 'center' });
+                    doc.end();
+
+                    setTimeout(async () => {
+                        await sock.sendMessage(sender, { text: aiReply || `🎉 Order Confirmed! Your Order ID is *${orderId}*.` });
+                        try {
+                            await sock.sendMessage(sender, { document: fs.readFileSync(pdfPath), mimetype: 'application/pdf', fileName: `Invoice-${orderId}.pdf` });
+                            if (fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath);
+                        } catch(e) { console.error("PDF Send Error:", e); }
+                    }, 1500);
+                } else {
+                    // Format Options / Buttons cleanly for WhatsApp
+                    const optMatch = aiReply.match(/\[OPTIONS:\s*(.+?)\]/i);
+                    if (optMatch) {
+                        const rawOptions = optMatch[1].split(',').map(o => o.trim()).filter(Boolean);
+                        aiReply = aiReply.replace(optMatch[0], '').trim();
+                        if (rawOptions.length > 0) {
+                            aiReply += '\n\n*Options:*\n' + rawOptions.map(o => `▫️ ${o}`).join('\n');
+                        }
+                    }
+                    await sock.sendMessage(sender, { text: aiReply }, { quoted: msg });
+                }
+                
+                // Save Bot Reply & Emit Live Event
+                const freshDB = readDB();
+                if(!freshDB.chats) freshDB.chats = {};
+                if(!freshDB.chats[sender]) freshDB.chats[sender] = [];
+                freshDB.chats[sender].push({ role: 'assistant', content: aiReply, timestamp: Date.now() });
+                writeDB(freshDB);
+                io.emit('live_message', { to: sender, role: 'assistant', content: aiReply, timestamp: Date.now() });
+            }
+        } catch (err) {
+            console.error("Failed to send AI message", err);
         }
     });
 }
@@ -462,6 +550,30 @@ app.post('/api/pair', async (req, res) => {
     }
 });
 
+app.post('/api/logout', async (req, res) => {
+    const { sessionId = 'default' } = req.body;
+    if (fs.existsSync(`auth_info_${sessionId}`)) {
+        fs.rmSync(`auth_info_${sessionId}`, { recursive: true, force: true });
+    }
+    const bState = getBotState(sessionId);
+    bState.status = 'offline';
+    bState.qr = null;
+    bState.pairingCode = null;
+    setBotState(sessionId, {});
+    
+    let sock = activeSessions.get(sessionId);
+    if (sock) {
+        try { 
+            sock.ev.removeAllListeners(); 
+            await sock.logout().catch(() => {});
+            sock.end(new Error('Logged out')); 
+        } catch(e){}
+        activeSessions.delete(sessionId);
+    }
+    setTimeout(() => connectToWhatsApp(sessionId), 2000);
+    res.json({ success: true });
+});
+
 app.post('/api/reset', (req, res) => {
     const { sessionId = 'default' } = req.body;
     if (fs.existsSync(`auth_info_${sessionId}`)) {
@@ -469,6 +581,8 @@ app.post('/api/reset', (req, res) => {
     }
     const bState = getBotState(sessionId);
     bState.status = 'offline';
+    bState.qr = null;
+    bState.pairingCode = null;
     setBotState(sessionId, {});
     
     let sock = activeSessions.get(sessionId);
@@ -489,6 +603,13 @@ app.post('/api/config', (req, res) => {
     const newDb = { ...db, ...req.body };
     writeDB(newDb);
     res.json({ success: true });
+});
+
+app.post('/api/settings', (req, res) => {
+    const db = readDB();
+    db.settings = { ...(db.settings || {}), ...req.body };
+    writeDB(db);
+    res.json({ success: true, settings: db.settings });
 });
 
 // Plugin Manager APIs
@@ -516,12 +637,14 @@ app.delete('/api/plugins/:name', (req, res) => {
 
 app.get('/api/chats', (req, res) => res.json(readDB().chats || {}));
 app.post('/api/chat/send', async (req, res) => {
-    const { to, text } = req.body;
-    const sock = activeSessions.get(cust.sessionId || 'default') || Array.from(activeSessions.values())[0];
+    const { to, text, sessionId = 'default' } = req.body;
+    const db = readDB();
+    const cust = db.shop?.customers?.find(c => c.jid === to || c.id === to);
+    const targetSession = cust?.sessionId || sessionId;
+    const sock = activeSessions.get(targetSession) || Array.from(activeSessions.values())[0];
     if (!sock) return res.status(400).json({error: 'Bot offline'});
     try {
         await sock.sendMessage(to, { text });
-        const db = readDB();
         if(!db.chats) db.chats = {};
         if(!db.chats[to]) db.chats[to] = [];
         db.chats[to].push({ role: 'assistant', content: text, timestamp: Date.now(), isManual: true });
@@ -658,7 +781,21 @@ app.post('/api/login', (req, res) => {
     }
 });
 
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'dist', 'index.html')));
+app.get('*', (req, res) => {
+    const indexPath = path.join(__dirname, 'dist', 'index.html');
+    if (fs.existsSync(indexPath)) {
+        return res.sendFile(indexPath);
+    }
+    try {
+        execSync('npx vite build', { stdio: 'inherit' });
+        if (fs.existsSync(indexPath)) {
+            return res.sendFile(indexPath);
+        }
+    } catch (e) {
+        console.error('[BUILD] Fallback build failed:', e.message);
+    }
+    res.status(503).send('<html><body style="font-family:sans-serif;padding:40px;text-align:center;"><h2>Building application assets...</h2><p>Please refresh in 5 seconds.</p><script>setTimeout(()=>location.reload(), 3000);</script></body></html>');
+});
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
