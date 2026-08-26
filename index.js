@@ -1158,7 +1158,7 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
         printQRInTerminal: false,
         auth: state,
         version,
-        browser: Browsers.ubuntu('Chrome'),
+        browser: ['Windows', 'Chrome', '120.0.0.0'],
         markOnlineOnConnect: true,
         syncFullHistory: false,
         generateHighQualityLinkPreview: false
