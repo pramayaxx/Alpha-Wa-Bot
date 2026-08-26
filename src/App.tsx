@@ -320,9 +320,10 @@ export default function App() {
                         {botState.pairingError && <div className="mt-4 p-4 text-rose-500 text-center text-sm font-bold bg-rose-50 dark:bg-rose-900/20 rounded-lg border border-rose-200">{botState.pairingError}</div>}
                       </div>
                       <div className="w-full md:w-px h-px md:h-64 bg-slate-200 dark:bg-slate-800"></div>
-                      <div className="flex-1 w-full text-center">
+                      <div className="flex-1 w-full text-center flex flex-col items-center">
                         <p className="mb-6 font-bold text-slate-700 dark:text-slate-300">Or Scan QR Code</p>
                         {botState.qr ? <div className="inline-block p-6 bg-white rounded-2xl shadow-lg border"><QRCodeSVG value={botState.qr} size={240}/></div> : <div className="h-[240px] w-[240px] mx-auto flex items-center justify-center text-slate-400 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl bg-slate-50 dark:bg-slate-800/50 font-medium">Waiting for QR...</div>}
+                        <button onClick={resetSession} className="mt-4 px-4 py-2 text-sm text-slate-500 hover:text-slate-800 dark:hover:text-slate-300 transition-colors">↻ Restart Connection</button>
                       </div>
                     </div>
                   )}

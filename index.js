@@ -650,7 +650,7 @@ app.post('/api/shop/pos-sync', async (req, res) => {
 app.post('/api/login', (req, res) => {
     const { password } = req.body;
     const db = readDB();
-    const adminPass = db.settings?.adminPassword || 'alpha123';
+    const adminPass = db.settings?.adminPassword ?? 'alpha123';
     if (password === adminPass) {
         res.json({ success: true, token: 'alpha_auth_success' });
     } else {
