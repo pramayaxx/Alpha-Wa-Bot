@@ -337,7 +337,7 @@ export default function App() {
                     <div>
                       <label className="block text-sm font-medium mb-1">Dashboard Admin Password</label>
                       <p className="text-xs text-slate-500 mb-2">Change the password used to login to this dashboard. (Default: alpha123)</p>
-                      <input type="text" value={config.settings?.adminPassword || 'alpha123'} onChange={e => setConfig({...config, settings: {...config.settings, adminPassword: e.target.value}})} className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent font-mono" placeholder="alpha123" />
+                      <input type="text" value={config.settings?.adminPassword ?? ''} onChange={e => setConfig({...config, settings: {...config.settings, adminPassword: e.target.value}})} className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent font-mono" placeholder="alpha123" />
                     </div>
                   </div>
                 </div>
@@ -365,11 +365,11 @@ export default function App() {
                       <div className="flex items-center gap-4">
                         <div className="flex-1">
                           <label className="block text-sm font-medium mb-1">Start Time</label>
-                          <input type="time" value={config.settings?.workHourStart || '09:00'} onChange={e => setConfig({...config, settings: {...config.settings, workHourStart: e.target.value}})} className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent font-mono" />
+                          <input type="time" value={config.settings?.workHourStart ?? '09:00'} onChange={e => setConfig({...config, settings: {...config.settings, workHourStart: e.target.value}})} className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent font-mono" />
                         </div>
                         <div className="flex-1">
                           <label className="block text-sm font-medium mb-1">End Time</label>
-                          <input type="time" value={config.settings?.workHourEnd || '17:00'} onChange={e => setConfig({...config, settings: {...config.settings, workHourEnd: e.target.value}})} className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent font-mono" />
+                          <input type="time" value={config.settings?.workHourEnd ?? '17:00'} onChange={e => setConfig({...config, settings: {...config.settings, workHourEnd: e.target.value}})} className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent font-mono" />
                         </div>
                       </div>
                     )}
@@ -426,7 +426,7 @@ export default function App() {
                     <h3 className="text-lg font-semibold mb-2 flex items-center gap-2"><RefreshCcw size={20}/> Alpha POS Integration</h3>
                     <p className="text-sm text-slate-500 mb-4">Automatically sync your products from <b>alphapos.zone.id</b>. Configure the API endpoint below.</p>
                     <div className="flex flex-col sm:flex-row gap-4">
-                        <input value={config.settings?.posApiUrl || 'https://alphapos.zone.id/api/products'} onChange={e => setConfig({...config, settings: {...config.settings, posApiUrl: e.target.value}})} className="flex-1 p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent" placeholder="POS API URL (https://alphapos.zone.id/api/products)" />
+                        <input value={config.settings?.posApiUrl ?? ''} onChange={e => setConfig({...config, settings: {...config.settings, posApiUrl: e.target.value}})} className="flex-1 p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent" placeholder="POS API URL (https://alphapos.zone.id/api/products)" />
                         <input value={config.settings?.posApiKey || ''} onChange={e => setConfig({...config, settings: {...config.settings, posApiKey: e.target.value}})} className="flex-1 p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent" placeholder="API Key / Bearer Token (Optional)" />
                         <button onClick={async () => {
                             await fetch('/api/settings', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(config.settings)});
