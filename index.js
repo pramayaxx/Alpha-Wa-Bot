@@ -1158,8 +1158,10 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
         printQRInTerminal: false,
         auth: state,
         version,
-        browser: ['Ubuntu', 'Chrome', '20.0.04'],
-        markOnlineOnConnect: false
+        browser: Browsers.ubuntu('Chrome'),
+        markOnlineOnConnect: true,
+        syncFullHistory: false,
+        generateHighQualityLinkPreview: false
     });
     
     globalSock = sock;
