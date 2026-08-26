@@ -40,6 +40,30 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
 app.use(express.json());
+
+app.post('/api/reset', (req, res) => {
+    console.log('[SYSTEM] Session reset requested. Deleting auth_info_baileys...');
+    const fs = require('fs');
+    if (fs.existsSync('auth_info_baileys')) {
+        fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+    }
+    botState.qr = null;
+    botState.pairingCode = null;
+    botState.pairingError = null;
+    
+    // Disconnect current socket if exists
+    if (globalSock) {
+        globalSock.ev.removeAllListeners();
+        globalSock.end(new Error('Reset requested'));
+    }
+    
+    setTimeout(() => {
+        connectToWhatsApp();
+    }, 2000);
+    
+    res.json({ success: true });
+});
+
 app.use(express.static(path.join(__dirname, 'dist')));
 
 let globalSock = null;
@@ -1188,7 +1212,7 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
                     botState.pairingCode = 'ERROR';
                     botState.pairingError = e.message;
                 }
-            } else if (!pairingPhoneNumber && !pairingCodeRequested && process.env.USE_PAIRING_CODE === 'true' && !sock.authState.creds.registered) {
+            } else if (false) {
                 const phoneNumber = process.env.BOT_PHONE_NUMBER?.replace(/[^0-9]/g, '');
                 if (phoneNumber) {
                     pairingCodeRequested = true;
