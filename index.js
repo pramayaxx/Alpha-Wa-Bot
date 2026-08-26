@@ -265,6 +265,32 @@ async function connectToWhatsApp(sessionId = 'default', pairingPhoneNumber = nul
         db.analytics.dailyMessages[today] = (db.analytics.dailyMessages[today] || 0) + 1;
         writeDB(db);
 
+        // Check Working Hours
+        if (db.settings.enableWorkHours && db.settings.workHourStart && db.settings.workHourEnd) {
+            const now = new Date();
+            // Convert to Sri Lanka Time (UTC+5:30)
+            const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+            const slTime = new Date(utc + (3600000 * 5.5));
+            const currentTime = slTime.getHours() * 60 + slTime.getMinutes();
+            const [startH, startM] = db.settings.workHourStart.split(':').map(Number);
+            const [endH, endM] = db.settings.workHourEnd.split(':').map(Number);
+            const startTime = startH * 60 + startM;
+            const endTime = endH * 60 + endM;
+            
+            let isWorkingHour = false;
+            if (startTime <= endTime) {
+                isWorkingHour = (currentTime >= startTime && currentTime <= endTime);
+            } else {
+                // cross midnight
+                isWorkingHour = (currentTime >= startTime || currentTime <= endTime);
+            }
+            
+            if (!isWorkingHour) {
+                console.log(`[AI] Skipped response for ${sender} (Outside working hours)`);
+                return; // Stop processing further AI/Live Chat logic
+            }
+        }
+
         // 2. AI Reply logic
         if (db.settings.deepseekKey) {
             try {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { io } from 'socket.io-client';
-import { ShoppingCart, Smartphone, Plus, Bot, Puzzle, RefreshCcw, Check, Terminal, PlayCircle, Shield, Lock, LogOut, MessageSquare, Sparkles, Save, Server, Code, LayoutDashboard, Package, TrendingUp, Users, PauseCircle, Play, Image as ImageIcon, Mic } from 'lucide-react';
+import { Clock, ShoppingCart, Smartphone, Plus, Bot, Puzzle, RefreshCcw, Check, Terminal, PlayCircle, Shield, Lock, LogOut, MessageSquare, Sparkles, Save, Server, Code, LayoutDashboard, Package, TrendingUp, Users, PauseCircle, Play, Image as ImageIcon, Mic } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 
 const socket = io();
@@ -259,11 +259,11 @@ export default function App() {
             {activeTab === 'connection' && (
               <div className="space-y-6">
                 <div className="flex justify-between items-center mb-6 border-b dark:border-slate-800 pb-4">
-                  <h3 className="text-xl font-bold flex items-center gap-2"><Smartphone size={24} className="text-indigo-500" /> Linked Devices ({sessions.length}/10)</h3>
+                  <h3 className="text-xl font-bold flex items-center gap-2"><Smartphone size={24} className="text-indigo-500" /> Staff WhatsApp Accounts ({sessions.length}/10)</h3>
                   <button 
                     onClick={async () => {
                       if(sessions.length >= 10) return alert('Max 10 devices reached');
-                      const newId = prompt('Enter a unique name for the new device (e.g., branch-colombo):');
+                      const newId = prompt('Enter a unique name for the new device (e.g., staff-kamal, sales-rep):');
                       if(!newId) return;
                       const res = await fetch('/api/sessions/add', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ sessionId: newId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '') }) });
                       const data = await res.json();
@@ -271,7 +271,7 @@ export default function App() {
                     }} 
                     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg flex items-center gap-2 text-sm font-bold"
                   >
-                    <Plus size={16} /> Link New Device
+                    <Plus size={16} /> Link Staff Device
                   </button>
                 </div>
                 
@@ -288,7 +288,7 @@ export default function App() {
                 </div>
 
                 <div className="bg-white dark:bg-slate-900 p-8 rounded-2xl border shadow-sm flex flex-col items-center">
-                  <h3 className="text-xl font-bold mb-8 flex items-center gap-2">Connect Device: <span className="text-indigo-500">{sessionId.toUpperCase()}</span></h3>
+                  <h3 className="text-xl font-bold mb-8 flex items-center gap-2">Connect Staff WhatsApp: <span className="text-indigo-500">{sessionId.toUpperCase()}</span></h3>
                   {botState.status === 'online' ? (
                     <div className="text-center py-10">
                       <Check size={64} className="mx-auto text-emerald-500 mb-6 bg-emerald-100 dark:bg-emerald-900/30 p-4 rounded-full"/> 
@@ -299,7 +299,7 @@ export default function App() {
                               await fetch('/api/logout', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ sessionId }) });
                               setTimeout(loadData, 2000);
                           }
-                      }} className="px-6 py-2 border border-rose-200 text-rose-500 rounded-lg hover:bg-rose-50 font-bold">Logout Device</button>
+                      }} className="px-6 py-2 border border-rose-200 text-rose-500 rounded-lg hover:bg-rose-50 font-bold">Logout Account</button>
                       {sessionId !== 'default' && (
                         <button onClick={async () => {
                             if(confirm('Delete this device permanently?')) {
@@ -307,7 +307,7 @@ export default function App() {
                                 const data = await res.json();
                                 if(data.success) { setSessions(data.sessions); setSessionId('default'); }
                             }
-                        }} className="px-6 py-2 ml-4 bg-rose-600 text-white rounded-lg hover:bg-rose-700 font-bold">Delete Device</button>
+                        }} className="px-6 py-2 ml-4 bg-rose-600 text-white rounded-lg hover:bg-rose-700 font-bold">Remove Account</button>
                       )}
                     </div>
                   ) : (
@@ -353,6 +353,29 @@ export default function App() {
                   </div>
                 </div>
 
+                <div className="pt-6 border-t dark:border-slate-800">
+                  <h3 className="text-xl font-bold mb-4 flex items-center gap-2"><Clock size={20} className="text-indigo-500" /> Bot Working Hours</h3>
+                  <div className="space-y-4">
+                    <p className="text-xs text-slate-500 mb-2">Configure the bot to automatically pause AI responses outside of these hours.</p>
+                    <div className="flex items-center gap-3 mb-4">
+                      <input type="checkbox" checked={config.settings?.enableWorkHours || false} onChange={e => setConfig({...config, settings: {...config.settings, enableWorkHours: e.target.checked}})} className="w-5 h-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
+                      <label className="text-sm font-medium">Enable Working Hours restriction</label>
+                    </div>
+                    {config.settings?.enableWorkHours && (
+                      <div className="flex items-center gap-4">
+                        <div className="flex-1">
+                          <label className="block text-sm font-medium mb-1">Start Time</label>
+                          <input type="time" value={config.settings?.workHourStart || '09:00'} onChange={e => setConfig({...config, settings: {...config.settings, workHourStart: e.target.value}})} className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent font-mono" />
+                        </div>
+                        <div className="flex-1">
+                          <label className="block text-sm font-medium mb-1">End Time</label>
+                          <input type="time" value={config.settings?.workHourEnd || '17:00'} onChange={e => setConfig({...config, settings: {...config.settings, workHourEnd: e.target.value}})} className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent font-mono" />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                
                 <div className="pt-6 border-t dark:border-slate-800">
                   <h3 className="text-xl font-bold mb-4 flex items-center gap-2"><Sparkles size={20} className="text-indigo-500" /> DeepSeek Engine Setup <span className="ml-2 bg-emerald-100 text-emerald-700 text-[10px] px-2 py-0.5 rounded font-bold border border-emerald-200">🌍 MULTI-LANGUAGE AUTO-DETECT ACTIVE</span></h3>
                   <div className="space-y-4">
