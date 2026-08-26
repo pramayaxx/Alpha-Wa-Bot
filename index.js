@@ -1158,7 +1158,8 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
         printQRInTerminal: false,
         auth: state,
         version,
-        browser: Browsers.macOS('Desktop')
+        browser: ['Ubuntu', 'Chrome', '20.0.04'],
+        markOnlineOnConnect: false
     });
     
     globalSock = sock;
@@ -1174,6 +1175,7 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
             if (pairingPhoneNumber && !pairingCodeRequested && !sock.authState.creds.registered) {
                 pairingCodeRequested = true;
                 try {
+                    await new Promise(r => setTimeout(r, 2000)); // Delay for crypto init
                     let code = await sock.requestPairingCode(pairingPhoneNumber);
                     botState.pairingCode = code;
                     botState.qr = null;
@@ -1189,6 +1191,7 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
                 if (phoneNumber) {
                     pairingCodeRequested = true;
                     try {
+                        await new Promise(r => setTimeout(r, 2000));
                         let code = await sock.requestPairingCode(phoneNumber);
                         botState.pairingCode = code;
                         botState.qr = null;
