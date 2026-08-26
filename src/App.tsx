@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { io } from 'socket.io-client';
-import { ShoppingCart, Bot, Puzzle, RefreshCcw, Check, Terminal, PlayCircle, Shield, Lock, LogOut, MessageSquare, Sparkles, Save, Server, Code } from 'lucide-react';
+import { ShoppingCart, Smartphone, Plus, Bot, Puzzle, RefreshCcw, Check, Terminal, PlayCircle, Shield, Lock, LogOut, MessageSquare, Sparkles, Save, Server, Code, LayoutDashboard, Package, TrendingUp, Users, PauseCircle, Play, Image as ImageIcon, Mic } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 
 const socket = io();
 
@@ -10,6 +11,12 @@ export default function App() {
   const [loginPass, setLoginPass] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [activeTab, setActiveTab] = useState('connection');
+  const [analytics, setAnalytics] = useState<any>({ dailyMessages: {}, popularProducts: {}, totalSales: 0 });
+  const [orders, setOrders] = useState<any[]>([]);
+  const [chats, setChats] = useState<any>({});
+  const [selectedChat, setSelectedChat] = useState<string | null>(null);
+  const [liveMessage, setLiveMessage] = useState('');
+  const [broadcastSegment, setBroadcastSegment] = useState('ALL');
   const [botState, setBotState] = useState({ status: 'offline', pairingCode: null, pairingError: null, qr: null });
   const [phoneInput, setPhoneInput] = useState('');
   const [config, setConfig] = useState<any>({ shop: {}, settings: { deepseekKey: '', systemPrompt: '' }, plugins: [] });
@@ -28,12 +35,9 @@ export default function App() {
   const [broadcastImg, setBroadcastImg] = useState('');
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [sessions, setSessions] = useState<string[]>(['default']);
+  const [sessionId, setSessionId] = useState('default');
 
-  const [sessionId] = useState(() => {
-    let sid = localStorage.getItem('alpha_session_id');
-    if (!sid) { sid = Math.random().toString(36).substring(2, 10); localStorage.setItem('alpha_session_id', sid); }
-    return sid;
-  });
 
   useEffect(() => {
     if (isDarkMode) document.documentElement.classList.add('dark');
@@ -46,6 +50,8 @@ export default function App() {
     fetch('/api/plugins').then(r => r.json()).then(setPlugins);
     fetch('/api/shop/products').then(r => r.json()).then(setProducts);
     fetch('/api/shop/customers').then(r => r.json()).then(setCustomers);
+    fetch('/api/shop/orders').then(r => r.json()).then(setOrders);
+    fetch("/api/sessions").then(r => r.json()).then(setSessions);
   }
 
   useEffect(() => {
@@ -73,9 +79,18 @@ export default function App() {
     }
   };
 
-  const saveConfig = async () => {
-    await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config) });
-    alert('All configurations saved successfully!');
+    const saveConfig = async () => {
+    let finalConfig = { ...config };
+    const baseInstruction = "\n\nIMPORTANT: To show interactive WhatsApp Buttons to the user, you MUST append a list at the very end of your message in this exact format: [OPTIONS: Button 1, Button 2, Button 3]\nWhen a customer wants to place an order, ALWAYS ask for their Full Name, Delivery Address, and Contact Number. Once they provide the delivery details, output EXACTLY: [CREATE_ORDER: ProductName || CustomerName || CustomerAddress || ContactNumber]\nTo check an order status, output EXACTLY: [CHECK_ORDER: OrderID]";
+    
+    if (finalConfig.settings && finalConfig.settings.systemPrompt && !finalConfig.settings.systemPrompt.includes('CREATE_ORDER')) {
+        finalConfig.settings.systemPrompt = finalConfig.settings.systemPrompt.replace(/\n\nIMPORTANT:.*CHECK_ORDER: OrderID\]/, '');
+        finalConfig.settings.systemPrompt += baseInstruction;
+    }
+
+    await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(finalConfig) });
+    setConfig(finalConfig);
+    alert('All configurations saved successfully! AI Instructions were updated.');
   };
 
   const savePlugin = async () => {
@@ -242,31 +257,78 @@ export default function App() {
           <div className="max-w-4xl mx-auto space-y-6">
             
             {activeTab === 'connection' && (
-              <div className="bg-white dark:bg-slate-900 p-8 rounded-2xl border shadow-sm">
-                <div className="flex justify-between items-center mb-6">
-                  <h3 className="text-lg font-semibold flex items-center gap-2">Device Pairing (Unlimited Sessions)</h3>
-                  <button onClick={resetSession} className="px-4 py-2 bg-rose-100 text-rose-600 rounded-lg text-sm font-medium">Reset Session</button>
+              <div className="space-y-6">
+                <div className="flex justify-between items-center mb-6 border-b dark:border-slate-800 pb-4">
+                  <h3 className="text-xl font-bold flex items-center gap-2"><Smartphone size={24} className="text-indigo-500" /> Linked Devices ({sessions.length}/10)</h3>
+                  <button 
+                    onClick={async () => {
+                      if(sessions.length >= 10) return alert('Max 10 devices reached');
+                      const newId = prompt('Enter a unique name for the new device (e.g., branch-colombo):');
+                      if(!newId) return;
+                      const res = await fetch('/api/sessions/add', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ sessionId: newId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '') }) });
+                      const data = await res.json();
+                      if(data.success) { setSessions(data.sessions); setSessionId(newId); } else { alert(data.error); }
+                    }} 
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg flex items-center gap-2 text-sm font-bold"
+                  >
+                    <Plus size={16} /> Link New Device
+                  </button>
                 </div>
-                {botState.status === 'online' ? (
-                  <div className="text-center py-10"><Check size={48} className="mx-auto text-emerald-500 mb-4"/> Connected Successfully!</div>
-                ) : (
-                  <div className="flex gap-12 items-center">
-                    <div className="flex-1">
-                      <label className="block text-sm mb-2">Phone Number</label>
-                      <input value={phoneInput} onChange={e => setPhoneInput(e.target.value)} placeholder="9470000000" className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 mb-4 bg-transparent" />
-                      <button onClick={requestPairingCode} className="w-full py-3 bg-indigo-600 text-white rounded-lg">Get Pairing Code</button>
-                      {botState.pairingCode && <div className="mt-4 p-4 text-center text-3xl font-mono tracking-widest bg-slate-100 dark:bg-slate-800 rounded-lg">{botState.pairingCode}</div>}
+                
+                <div className="flex gap-4 mb-6 overflow-x-auto pb-2">
+                  {sessions.map(s => (
+                    <button 
+                      key={s} 
+                      onClick={() => setSessionId(s)} 
+                      className={`px-6 py-3 rounded-xl font-bold whitespace-nowrap transition-all ${sessionId === s ? 'bg-indigo-600 text-white shadow-lg' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+                    >
+                      {s.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="bg-white dark:bg-slate-900 p-8 rounded-2xl border shadow-sm flex flex-col items-center">
+                  <h3 className="text-xl font-bold mb-8 flex items-center gap-2">Connect Device: <span className="text-indigo-500">{sessionId.toUpperCase()}</span></h3>
+                  {botState.status === 'online' ? (
+                    <div className="text-center py-10">
+                      <Check size={64} className="mx-auto text-emerald-500 mb-6 bg-emerald-100 dark:bg-emerald-900/30 p-4 rounded-full"/> 
+                      <h2 className="text-2xl font-bold mb-2">Connected Successfully!</h2>
+                      <p className="text-slate-500 mb-8">This device is actively sending and receiving messages.</p>
+                      <button onClick={async () => {
+                          if(confirm('Logout this device?')) {
+                              await fetch('/api/logout', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ sessionId }) });
+                              setTimeout(loadData, 2000);
+                          }
+                      }} className="px-6 py-2 border border-rose-200 text-rose-500 rounded-lg hover:bg-rose-50 font-bold">Logout Device</button>
+                      {sessionId !== 'default' && (
+                        <button onClick={async () => {
+                            if(confirm('Delete this device permanently?')) {
+                                const res = await fetch('/api/sessions/remove', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ sessionId }) });
+                                const data = await res.json();
+                                if(data.success) { setSessions(data.sessions); setSessionId('default'); }
+                            }
+                        }} className="px-6 py-2 ml-4 bg-rose-600 text-white rounded-lg hover:bg-rose-700 font-bold">Delete Device</button>
+                      )}
                     </div>
-                    <div className="w-px bg-slate-200 self-stretch"></div>
-                    <div className="flex-1 text-center">
-                      <p className="mb-4">Or scan QR Code</p>
-                      {botState.qr ? <div className="inline-block p-4 bg-white rounded-xl"><QRCodeSVG value={botState.qr} size={200}/></div> : <div className="h-[200px] flex items-center justify-center text-slate-400 border-2 border-dashed rounded-xl">Waiting for QR...</div>}
+                  ) : (
+                    <div className="w-full max-w-4xl flex flex-col md:flex-row gap-12 items-center">
+                      <div className="flex-1 w-full">
+                        <label className="block text-sm mb-2 font-bold text-slate-700 dark:text-slate-300">Link with Phone Number</label>
+                        <input value={phoneInput} onChange={e => setPhoneInput(e.target.value)} placeholder="9470000000" className="w-full p-4 rounded-xl border-2 dark:border-slate-700 mb-4 bg-transparent focus:border-indigo-500 outline-none transition-colors font-mono text-lg" />
+                        <button onClick={requestPairingCode} className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-lg shadow-lg shadow-indigo-600/30 transition-all">Get Pairing Code</button>
+                        {botState.pairingCode && <div className="mt-6 p-6 text-center text-4xl font-mono tracking-widest bg-slate-100 dark:bg-slate-800 rounded-xl font-bold text-indigo-600 border border-indigo-200 dark:border-indigo-900/50">{botState.pairingCode}</div>}
+                        {botState.pairingError && <div className="mt-4 p-4 text-rose-500 text-center text-sm font-bold bg-rose-50 dark:bg-rose-900/20 rounded-lg border border-rose-200">{botState.pairingError}</div>}
+                      </div>
+                      <div className="w-full md:w-px h-px md:h-64 bg-slate-200 dark:bg-slate-800"></div>
+                      <div className="flex-1 w-full text-center">
+                        <p className="mb-6 font-bold text-slate-700 dark:text-slate-300">Or Scan QR Code</p>
+                        {botState.qr ? <div className="inline-block p-6 bg-white rounded-2xl shadow-lg border"><QRCodeSVG value={botState.qr} size={240}/></div> : <div className="h-[240px] w-[240px] mx-auto flex items-center justify-center text-slate-400 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl bg-slate-50 dark:bg-slate-800/50 font-medium">Waiting for QR...</div>}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             )}
-
             {activeTab === 'ai' && (
               <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border shadow-sm space-y-8">
                 <div>
@@ -292,11 +354,14 @@ export default function App() {
                 </div>
 
                 <div className="pt-6 border-t dark:border-slate-800">
-                  <h3 className="text-xl font-bold mb-4 flex items-center gap-2"><Sparkles size={20} className="text-indigo-500" /> DeepSeek Engine Setup</h3>
+                  <h3 className="text-xl font-bold mb-4 flex items-center gap-2"><Sparkles size={20} className="text-indigo-500" /> DeepSeek Engine Setup <span className="ml-2 bg-emerald-100 text-emerald-700 text-[10px] px-2 py-0.5 rounded font-bold border border-emerald-200">🌍 MULTI-LANGUAGE AUTO-DETECT ACTIVE</span></h3>
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-sm font-medium mb-1">DeepSeek API Key</label>
-                      <input type="password" value={config.settings?.deepseekKey || ''} onChange={e => setConfig({...config, settings: {...config.settings, deepseekKey: e.target.value}})} className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent font-mono" placeholder="sk-..." />
+                      <label className="block text-sm font-medium mb-1">DeepSeek API Key (Core AI)</label>
+                      <input type="password" value={config.settings?.deepseekKey || ''} onChange={e => setConfig({...config, settings: {...config.settings, deepseekKey: e.target.value}})} className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent font-mono mb-4" placeholder="sk-..." />
+                      <label className="block text-sm font-medium mb-1 flex items-center gap-2"><ImageIcon size={16}/> Gemini API Key (Voice & Image Recognition)</label>
+                      <p className="text-xs text-slate-500 mb-2">Required for Voice Notes & Image processing capabilities.</p>
+                      <input type="password" value={config.settings?.geminiKey || ''} onChange={e => setConfig({...config, settings: {...config.settings, geminiKey: e.target.value}})} className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent font-mono" placeholder="AIzaSy..." />
                     </div>
                     <div>
                       <label className="block text-sm font-medium mb-1">AI Shop Assistant Persona (System Prompt)</label>
@@ -379,6 +444,40 @@ export default function App() {
                   </div>
                 </div>
 
+                
+                {/* RECENT ORDERS */}
+                <h3 className="text-lg font-semibold mt-8 mb-4 border-b pb-2 dark:border-slate-800 flex items-center gap-2"><Package size={20}/> Recent Orders</h3>
+                <div className="bg-white dark:bg-slate-900 rounded-2xl border shadow-sm overflow-x-auto mb-6">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50 dark:bg-slate-800 text-slate-500 font-medium border-b dark:border-slate-700">
+                      <tr>
+                        <th className="p-4">Order ID</th>
+                        <th className="p-4">Date</th>
+                        <th className="p-4">Customer</th>
+                        <th className="p-4">Contact</th>
+                        <th className="p-4">Address</th>
+                        <th className="p-4">Product</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {orders.length === 0 ? (
+                        <tr><td colSpan={6} className="p-8 text-center text-slate-500">No orders placed yet.</td></tr>
+                      ) : (
+                        orders.slice().reverse().map(o => (
+                          <tr key={o.id} className="border-b dark:border-slate-800 last:border-0 hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                            <td className="p-4 font-mono font-medium">{o.id}</td>
+                            <td className="p-4 text-slate-500">{new Date(o.date).toLocaleDateString()}</td>
+                            <td className="p-4 font-medium">{o.customerName || 'N/A'}</td>
+                            <td className="p-4">{o.contactNumber || 'N/A'}</td>
+                            <td className="p-4 max-w-xs truncate">{o.customerAddress || 'N/A'}</td>
+                            <td className="p-4"><span className="px-2 py-1 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 rounded-md font-medium text-xs">{o.productName}</span></td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                
                 {/* PRODUCT LIST */}
                 <h3 className="text-lg font-semibold mt-8 mb-4 border-b pb-2 dark:border-slate-800">Product Catalog (Auto-Injected to DeepSeek AI)</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
