@@ -1178,9 +1178,12 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
     const msgRetryCounterCache = new NodeCache();
 
     const sock = makeWASocket({
-        logger: pino({ level: 'silent' }),
+        logger: pino({ level: 'info' }, fs.createWriteStream('/app/applet/wa.log')),
         printQRInTerminal: false,
-        auth: state,
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
+        },
         version,
         browser: ['Windows', 'Chrome', '120.0.0.0'],
         markOnlineOnConnect: true,
@@ -1241,8 +1244,15 @@ async function connectToWhatsApp (pairingPhoneNumber = null) {
             io.emit('bot_state', botState);
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            
+            // Clean up old socket before reconnecting
+            if (globalSock) {
+                globalSock.ev.removeAllListeners();
+            }
+
             if(shouldReconnect) {
-                setTimeout(() => connectToWhatsApp(), 3000); // Intentionally not passing pairingPhoneNumber to avoid invalidating the current code
+                console.log('[SYSTEM] Reconnecting... Status Code:', statusCode);
+                setTimeout(() => connectToWhatsApp(), 3000); 
             } else {
                 botState.qr = null;
                 botState.pairingCode = null;
