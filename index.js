@@ -6,7 +6,8 @@ const { execSync } = require('child_process');
 const pino = require('pino');
 const { Server } = require('socket.io');
 const PDFDocument = require('pdfkit');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, makeCacheableSignalKeyStore, jidNormalizedUser, fetchLatestBaileysVersion, Browsers, downloadMediaMessage } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, makeCacheableSignalKeyStore, jidNormalizedUser, fetchLatestBaileysVersion, Browsers, downloadMediaMessage, delay } = require('@whiskeysockets/baileys');
+const NodeCache = require('node-cache');
 const { GoogleGenAI } = require('@google/genai');
 
 // Ensure dist/index.html is built
@@ -49,7 +50,7 @@ const sessionStates = new Map();
 
 function getBotState(sessionId) {
     if (!sessionStates.has(sessionId)) {
-        sessionStates.set(sessionId, { status: 'offline', pairingCode: null, pairingError: null, qr: null });
+        sessionStates.set(sessionId, { status: 'offline', pairingCode: null, pairingError: null, qr: null, user: null });
     }
     return sessionStates.get(sessionId);
 }
@@ -58,6 +59,53 @@ function setBotState(sessionId, updates) {
     const state = getBotState(sessionId);
     Object.assign(state, updates);
     io.emit(`bot_state_${sessionId}`, state);
+}
+
+function getSessionDeviceInfo(sessionId) {
+    const state = getBotState(sessionId);
+    let registeredPhone = null;
+    let userName = null;
+    let isRegistered = false;
+
+    // Check disk creds
+    const credsPath = path.join(__dirname, `auth_info_${sessionId}`, 'creds.json');
+    if (fs.existsSync(credsPath)) {
+        try {
+            const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+            if (creds.me && creds.me.id) {
+                registeredPhone = creds.me.id.split(':')[0].split('@')[0];
+                userName = creds.me.name || creds.me.notify || 'WhatsApp User';
+                isRegistered = true;
+            } else if (creds.registered) {
+                isRegistered = true;
+            }
+        } catch(e) {}
+    }
+
+    if (state.user && state.user.phone) {
+        registeredPhone = state.user.phone;
+        userName = state.user.name || userName;
+    }
+
+    const db = readDB();
+    const savedDev = db.settings?.devices?.[sessionId];
+    if (savedDev && !registeredPhone) {
+        registeredPhone = savedDev.phone;
+        userName = savedDev.name || userName;
+    }
+
+    return {
+        sessionId,
+        status: state.status,
+        isOnline: state.status === 'online',
+        isRegistered,
+        phone: registeredPhone,
+        name: userName,
+        user: state.user || (registeredPhone ? { phone: registeredPhone, name: userName } : null),
+        qr: state.qr,
+        pairingCode: state.pairingCode,
+        pairingError: state.pairingError
+    };
 }
 
 // --- AI INTEGRATION (DEEPSEEK & GEMINI) ---
@@ -128,6 +176,104 @@ async function askGemini(prompt, userMsg, sender, customKey) {
     }
 }
 
+// --- SESSION ID RESTORATION HELPER ---
+async function parseAndSaveSessionId(rawSessionId, targetSession = 'default') {
+    if (!rawSessionId || typeof rawSessionId !== 'string') {
+        throw new Error('Please enter a valid Session ID string.');
+    }
+    
+    let clean = rawSessionId.trim();
+    // Strip common prefixes e.g. SHADOW~, ALPHA~, PRABHATH-MD~, SESSION_ID~, etc.
+    if (clean.includes('~')) {
+        const parts = clean.split('~');
+        clean = parts.slice(1).join('~').trim();
+    } else if (clean.includes(':::')) {
+        clean = clean.split(':::')[1].trim();
+    } else if (clean.startsWith('SESSION_') && clean.includes('_')) {
+        clean = clean.substring(clean.indexOf('_') + 1).trim();
+    }
+
+    let credsJson = null;
+
+    // Check if it is direct JSON
+    if (clean.startsWith('{') && clean.endsWith('}')) {
+        try {
+            credsJson = JSON.parse(clean);
+        } catch(e) {}
+    }
+
+    // Try Base64 decode
+    if (!credsJson) {
+        try {
+            let normalizedBase64 = clean.replace(/-/g, '+').replace(/_/g, '/');
+            while (normalizedBase64.length % 4 !== 0) {
+                normalizedBase64 += '=';
+            }
+            const decoded = Buffer.from(normalizedBase64, 'base64').toString('utf8');
+            credsJson = JSON.parse(decoded);
+        } catch (e) {
+            // Check if it is a remote link (Pastebin / Gist / RAW url)
+            if (clean.startsWith('http://') || clean.startsWith('https://')) {
+                const fetchRes = await fetch(clean);
+                const text = await fetchRes.text();
+                try {
+                    credsJson = JSON.parse(text);
+                } catch(e2) {
+                    const decoded = Buffer.from(text.trim(), 'base64').toString('utf8');
+                    credsJson = JSON.parse(decoded);
+                }
+            } else {
+                throw new Error('Invalid Session ID format. Could not decode base64 or JSON credentials.');
+            }
+        }
+    }
+
+    // Unwrap if wrapped in { creds: { ... } }
+    if (credsJson && credsJson.creds && typeof credsJson.creds === 'object') {
+        credsJson = credsJson.creds;
+    }
+
+    if (!credsJson || (!credsJson.noiseKey && !credsJson.signedIdentityKey && !credsJson.registrationId && !credsJson.me)) {
+        throw new Error('Session ID does not contain valid WhatsApp credentials (missing noiseKey / identity keys).');
+    }
+
+    const sessionDir = path.join(__dirname, `auth_info_${targetSession}`);
+    if (!fs.existsSync(sessionDir)) {
+        fs.mkdirSync(sessionDir, { recursive: true });
+    }
+
+    const credsPath = path.join(sessionDir, 'creds.json');
+    fs.writeFileSync(credsPath, JSON.stringify(credsJson, null, 2), 'utf8');
+
+    // Close any previous socket cleanly
+    let prevSock = activeSessions.get(targetSession);
+    if (prevSock) {
+        prevSock.isExplicitClosed = true;
+        try {
+            prevSock.ev.removeAllListeners();
+            prevSock.ws?.close();
+            prevSock.end(new Error('Reloading with Session ID'));
+        } catch(e) {}
+        activeSessions.delete(targetSession);
+    }
+
+    setBotState(targetSession, { 
+        status: 'connecting', 
+        qr: null, 
+        pairingCode: null, 
+        pairingError: null 
+    });
+
+    setTimeout(() => connectToWhatsApp(targetSession), 800);
+
+    return {
+        success: true,
+        sessionId: targetSession,
+        registeredPhone: credsJson.me?.id ? credsJson.me.id.split(':')[0].split('@')[0] : null,
+        userName: credsJson.me?.name || credsJson.me?.notify || null
+    };
+}
+
 // --- DYNAMIC PLUGIN LOADER ---
 const pluginsDir = path.join(__dirname, 'plugins');
 if (!fs.existsSync(pluginsDir)) fs.mkdirSync(pluginsDir);
@@ -152,23 +298,25 @@ function loadPlugins(sock, msg, sessionId) {
 async function connectToWhatsApp(sessionId = 'default', pairingPhoneNumber = null) {
     try {
         const { state, saveCreds } = await useMultiFileAuthState(`auth_info_${sessionId}`);
+        const { version, isLatest } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1043857760], isLatest: true }));
+        const msgRetryCounterCache = new NodeCache();
 
-        const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1043857760] }));
         const sock = makeWASocket({
             version,
             logger: pino({ level: 'silent' }),
             printQRInTerminal: false,
+            browser: Browsers.windows('Firefox'),
             auth: {
                 creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
+                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
             },
-            browser: Browsers.ubuntu('Chrome'),
             markOnlineOnConnect: true,
-            syncFullHistory: false,
-            keepAliveIntervalMs: 30000,
-            retryRequestDelayMs: 5000,
-            maxMsgRetryCount: 5,
-            defaultQueryTimeoutMs: 60000
+            generateHighQualityLinkPreview: true,
+            getMessage: async (key) => {
+                return { conversation: '' };
+            },
+            msgRetryCounterCache,
+            defaultQueryTimeoutMs: undefined,
         });
 
         sock.sessionId = sessionId;
@@ -192,7 +340,7 @@ async function connectToWhatsApp(sessionId = 'default', pairingPhoneNumber = nul
                         setBotState(sessionId, { pairingCode: 'ERROR', pairingError: e.message, status: 'error' });
                     }
                 }
-            }, 2500);
+            }, 3000);
         }
 
         sock.ev.on('connection.update', async (update) => {
@@ -200,36 +348,73 @@ async function connectToWhatsApp(sessionId = 'default', pairingPhoneNumber = nul
             const { connection, lastDisconnect, qr } = update;
             
             if (qr && !pairingPhoneNumber && !sock.authState.creds.registered) {
-                console.log(`[WA] QR Code generated for ${sessionId}. Length: ${qr.length}`);
-                setBotState(sessionId, { qr: qr, pairingCode: null, status: 'connecting' });
+                console.log(`[WA] QR Code ready for ${sessionId}. Length: ${qr.length}`);
+                setBotState(sessionId, { qr: qr, pairingCode: null, status: 'connecting', pairingError: null });
             }
 
             if (connection === 'close') {
                 if (activeSessions.get(sessionId) !== sock) return;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut && !sock.isExplicitClosed;
+                console.log(`[WA] Session "${sessionId}" connection closed. Status code: ${statusCode}`);
+                
+                const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+                const shouldReconnect = !isLoggedOut && !sock.isExplicitClosed;
                 
                 activeSessions.delete(sessionId);
 
                 if (shouldReconnect) {
-                    setBotState(sessionId, { status: 'offline' });
-                    setTimeout(() => connectToWhatsApp(sessionId), 3000); 
+                    const credsPath = path.join(__dirname, `auth_info_${sessionId}`, 'creds.json');
+                    const hasCreds = fs.existsSync(credsPath);
+                    setBotState(sessionId, { 
+                        status: hasCreds ? 'connecting' : 'connecting',
+                        pairingError: null
+                    });
+                    setTimeout(() => connectToWhatsApp(sessionId), 2000); 
                 } else {
-                    setBotState(sessionId, { status: 'offline', qr: null, pairingCode: null });
+                    if (isLoggedOut && fs.existsSync(`auth_info_${sessionId}`)) {
+                        fs.rmSync(`auth_info_${sessionId}`, { recursive: true, force: true });
+                    }
+                    setBotState(sessionId, { status: 'offline', qr: null, pairingCode: null, user: null });
                 }
             } else if (connection === 'open') {
-                setBotState(sessionId, { status: 'online', qr: null, pairingCode: null, pairingError: null });
+                const userPhone = sock.user?.id ? sock.user.id.split(':')[0].split('@')[0] : '';
+                const userName = sock.user?.name || sock.user?.notify || 'WhatsApp User';
+                const userJid = sock.user?.id ? jidNormalizedUser(sock.user.id) : '';
+
+                console.log(`[WA] Connected successfully for ${sessionId}! Phone: ${userPhone}, Name: ${userName}`);
+
+                setBotState(sessionId, { 
+                    status: 'online', 
+                    qr: null, 
+                    pairingCode: null, 
+                    pairingError: null,
+                    user: {
+                        id: userJid,
+                        phone: userPhone,
+                        name: userName
+                    }
+                });
                 
                 const db = readDB();
-                let welcomeMsg = db.settings?.deviceWelcomeMsg || `🚀 *ALPHA SHOP & AI ACTIVE* 🚀\n\nYour WhatsApp is now successfully connected!\n\n👤 *Session ID:* {session_id}\n🤖 *AI Engine:* DeepSeek\n🛒 *Shop Systems:* Online\n✅ *Status:* Active & Secured\n\n_Powered by ALPHA MOBILE_`;
-                welcomeMsg = welcomeMsg.replace('{session_id}', sessionId);
+                if (!db.settings) db.settings = {};
+                if (!db.settings.devices) db.settings.devices = {};
+                db.settings.devices[sessionId] = {
+                    sessionId,
+                    phone: userPhone,
+                    name: userName,
+                    jid: userJid,
+                    connectedAt: new Date().toISOString()
+                };
+                writeDB(db);
+
+                let welcomeMsg = db.settings?.deviceWelcomeMsg || `🚀 *ALPHA SHOP & AI ACTIVE* 🚀\n\nYour WhatsApp is now successfully connected!\n\n👤 *Session ID:* {session_id}\n📱 *Phone:* {phone}\n🤖 *AI Engine:* DeepSeek\n🛒 *Shop Systems:* Online\n✅ *Status:* Active & Secured\n\n_Powered by ALPHA MOBILE_`;
+                welcomeMsg = welcomeMsg.replace('{session_id}', sessionId).replace('{phone}', '+' + userPhone);
 
                 try {
-                    const myJid = jidNormalizedUser(sock.user.id);
-                    await sock.sendMessage(myJid, { text: welcomeMsg });
-                    console.log(`[SYSTEM] Welcome message sent to ${myJid}`);
+                    await sock.sendMessage(userJid, { text: welcomeMsg });
+                    console.log(`[SYSTEM] Welcome message sent to ${userJid}`);
                 } catch (err) {
-                    console.error('[SYSTEM] Failed to send welcome message', err);
+                    console.error('[SYSTEM] Failed to send welcome message', err.message);
                 }
             }
         });
@@ -508,7 +693,52 @@ app.post('/api/sessions/remove', (req, res) => {
 });
 app.get('/api/state', (req, res) => {
     const sessionId = req.query.sessionId || 'default';
-    res.json(getBotState(sessionId));
+    const devInfo = getSessionDeviceInfo(sessionId);
+    res.json({
+        ...getBotState(sessionId),
+        registeredPhone: devInfo.phone,
+        userName: devInfo.name,
+        isRegistered: devInfo.isRegistered
+    });
+});
+
+app.get('/api/devices', (req, res) => {
+    const db = readDB();
+    const sessionList = db.settings.sessions || ['default'];
+    const devices = sessionList.map(s => getSessionDeviceInfo(s));
+    res.json(devices);
+});
+
+app.post('/api/send-test', async (req, res) => {
+    try {
+        const { sessionId = 'default', targetPhone, message } = req.body;
+        const sock = activeSessions.get(sessionId);
+        if (!sock) {
+            return res.status(400).json({ error: 'WhatsApp session is not active or connected.' });
+        }
+        
+        let jid = targetPhone;
+        if (!jid) {
+            if (sock.user && sock.user.id) {
+                jid = jidNormalizedUser(sock.user.id);
+            } else {
+                return res.status(400).json({ error: 'No target phone number specified.' });
+            }
+        } else {
+            let clean = targetPhone.replace(/[^0-9]/g, '');
+            if (clean.startsWith('00')) clean = clean.substring(2);
+            if (clean.startsWith('0')) clean = '94' + clean.substring(1);
+            else if (clean.length === 9 && clean.startsWith('7')) clean = '94' + clean;
+            jid = clean + '@s.whatsapp.net';
+        }
+
+        const testText = message || `⚡ *ALPHA MOBILE TEST NOTIFICATION* ⚡\n\n✅ Your WhatsApp connection is live, verified, and operational!\n\n🕒 *Time:* ${new Date().toLocaleTimeString()}\n👤 *Session:* ${sessionId}\n🤖 *AI Engine:* Ready`;
+        await sock.sendMessage(jid, { text: testText });
+        res.json({ success: true, target: jid });
+    } catch (err) {
+        console.error('Test message send error:', err);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.post('/api/pair', async (req, res) => {
@@ -595,6 +825,36 @@ app.post('/api/qr/refresh', (req, res) => {
     setBotState(sessionId, { status: 'connecting', qr: null, pairingCode: null, pairingError: null });
     setTimeout(() => connectToWhatsApp(sessionId), 800);
     res.json({ success: true });
+});
+
+app.post('/api/session-id/import', async (req, res) => {
+    try {
+        const { sessionId = 'default', sessionData } = req.body;
+        if (!sessionData || !sessionData.trim()) {
+            return res.status(400).json({ error: 'Please enter or paste your WhatsApp Session ID.' });
+        }
+        const result = await parseAndSaveSessionId(sessionData, sessionId);
+        res.json(result);
+    } catch(err) {
+        console.error('Session ID Import Error:', err.message);
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.get('/api/session-id/export', (req, res) => {
+    const { sessionId = 'default' } = req.query;
+    const credsPath = path.join(__dirname, `auth_info_${sessionId}`, 'creds.json');
+    if (!fs.existsSync(credsPath)) {
+        return res.status(404).json({ error: 'No active credentials found for this session.' });
+    }
+    try {
+        const data = fs.readFileSync(credsPath, 'utf8');
+        const b64 = Buffer.from(data).toString('base64');
+        const sessionIdString = `SHADOW~${b64}`;
+        res.json({ success: true, sessionId: sessionIdString, rawBase64: b64 });
+    } catch(e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 app.post('/api/reset', (req, res) => {
@@ -823,25 +1083,14 @@ server.listen(PORT, '0.0.0.0', () => {
     const db = readDB(); (db.settings.sessions || ['default']).forEach(s => connectToWhatsApp(s));
 });
 
-// Background Job for AI Retargeting (runs every hour)
-setInterval(() => {
-    const db = readDB();
-    const now = Date.now();
-    const TWO_DAYS = 2 * 24 * 60 * 60 * 1000;
-    
-    if(db.shop && db.shop.customers) {
-        db.shop.customers.forEach(async (cust) => {
-            // If inactive for 2 days and hasn't been retargeted recently
-            if(cust.lastActive && (now - cust.lastActive > TWO_DAYS) && (!cust.lastRetargeted || (now - cust.lastRetargeted > TWO_DAYS))) {
-                const sock = activeSessions.get('default');
-                if(sock) {
-                    try {
-                        await sock.sendMessage(cust.id, { text: `👋 Hello again from Alpha Mobile!\n\nAre you still looking for the perfect product? We have some special discounts today! Let me know if you need any help.` });
-                        cust.lastRetargeted = now;
-                        writeDB(db);
-                    } catch(e) {}
-                }
-            }
-        });
-    }
-}, 60 * 60 * 1000); // 1 hour
+process.on('uncaughtException', function (err) {
+    let e = String(err);
+    if (e.includes("conflict")) return;
+    if (e.includes("not-authorized")) return;
+    if (e.includes("Socket connection timeout")) return;
+    if (e.includes("rate-overlimit")) return;
+    if (e.includes("Connection Closed")) return;
+    if (e.includes("Timed Out")) return;
+    if (e.includes("Value not found")) return;
+    console.log('Caught exception: ', err);
+});
