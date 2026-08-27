@@ -11,6 +11,25 @@ const NodeCache = require('node-cache');
 const { GoogleGenAI } = require('@google/genai');
 const { File: MegaFile } = require('megajs');
 
+// Global Signal and transient decrypt error handler
+process.on('uncaughtException', (err) => {
+    const msg = err?.message || String(err);
+    if (msg.includes('Bad MAC') || msg.includes('decrypt') || msg.includes('Session error') || msg.includes('Session ID') || msg.includes('PreKey')) {
+        console.warn(`[WA-SIGNAL] Handled transient Signal key/MAC event: ${msg}`);
+        return;
+    }
+    console.error('[UNCAUGHT EXCEPTION]', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+    const msg = reason?.message || String(reason);
+    if (msg.includes('Bad MAC') || msg.includes('decrypt') || msg.includes('Session error') || msg.includes('Session ID') || msg.includes('PreKey')) {
+        console.warn(`[WA-SIGNAL] Handled transient Signal rejection: ${msg}`);
+        return;
+    }
+    console.error('[UNHANDLED REJECTION]', reason);
+});
+
 // Ensure dist/index.html is built
 const distIndexPath = path.join(__dirname, 'dist', 'index.html');
 if (!fs.existsSync(distIndexPath)) {
@@ -110,61 +129,103 @@ function getSessionDeviceInfo(sessionId) {
 }
 
 // --- AI INTEGRATION (DEEPSEEK & GEMINI) ---
-async function askDeepSeek(prompt, userMsg, sender) {
+async function askDeepSeek(prompt, userMsg, sender, customKey) {
     const db = readDB();
-    const apiKey = db.settings?.deepseekKey;
+    const apiKey = (customKey || db.settings?.deepseekKey || '').trim();
     if (!apiKey) return null;
 
     if (!db.chats) db.chats = {};
-    if (!db.chats[sender]) db.chats[sender] = [];
+    if (sender && !db.chats[sender]) db.chats[sender] = [];
     
     // Cleanup messages older than 24 Hours
     const ONE_DAY = 24 * 60 * 60 * 1000;
     const now = Date.now();
-    db.chats[sender] = db.chats[sender].filter(msg => (now - msg.timestamp) < ONE_DAY);
+    if (sender && db.chats[sender]) {
+        db.chats[sender] = db.chats[sender].filter(msg => (now - msg.timestamp) < ONE_DAY);
+    }
     
+    const history = (sender && db.chats[sender] ? db.chats[sender] : [])
+        .slice(-10)
+        .filter(m => m && m.content && typeof m.content === 'string')
+        .map(m => ({
+            role: m.role === 'assistant' ? 'assistant' : 'user',
+            content: String(m.content).slice(0, 1000)
+        }));
+
     const messages = [
         { role: "system", content: prompt },
-        ...db.chats[sender].map(m => ({ role: m.role, content: m.content })),
-        { role: "user", content: userMsg }
+        ...history,
+        { role: "user", content: String(userMsg) }
     ];
     
-    try {
-        const response = await fetch('https://api.deepseek.com/chat/completions', {
-            method: 'POST',
-            body: JSON.stringify({
-                model: "deepseek-chat",
-                messages: messages
-            }),
-            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }
-        });
-        const data = await response.json();
-        if (data.choices && data.choices[0]) {
-            const reply = data.choices[0].message.content;
-            return reply;
+    const endpoints = [
+        'https://api.deepseek.com/chat/completions',
+        'https://api.deepseek.com/v1/chat/completions'
+    ];
+
+    let lastErrorMsg = null;
+    for (const ep of endpoints) {
+        try {
+            console.log(`[DEEPSEEK] Calling DeepSeek API (${ep})...`);
+            const response = await fetch(ep, {
+                method: 'POST',
+                body: JSON.stringify({
+                    model: "deepseek-chat",
+                    messages: messages,
+                    temperature: 0.7,
+                    max_tokens: 1500
+                }),
+                headers: { 
+                    'Authorization': `Bearer ${apiKey}`, 
+                    'Content-Type': 'application/json' 
+                },
+                signal: AbortSignal.timeout(20000)
+            });
+
+            if (!response.ok) {
+                const errBody = await response.text();
+                lastErrorMsg = `Status ${response.status}: ${errBody}`;
+                console.error(`[DEEPSEEK API ERROR] (${ep}):`, lastErrorMsg);
+                continue;
+            }
+
+            const data = await response.json();
+            if (data.choices && data.choices[0] && data.choices[0].message?.content) {
+                const reply = data.choices[0].message.content.trim();
+                console.log(`[DEEPSEEK] Successfully generated response (${reply.length} chars)`);
+                return reply;
+            } else if (data.error) {
+                lastErrorMsg = JSON.stringify(data.error);
+                console.error(`[DEEPSEEK ERROR PAYLOAD]:`, lastErrorMsg);
+            }
+        } catch (err) {
+            lastErrorMsg = err.message;
+            console.error(`[DEEPSEEK NETWORK ERROR] (${ep}):`, err.message);
         }
-        return null;
-    } catch (err) {
-        console.error("DeepSeek Error:", err.message);
-        return null;
     }
+    return null;
 }
 
 async function askGemini(prompt, userMsg, sender, customKey) {
-    const apiKey = customKey || process.env.GEMINI_API_KEY;
+    const apiKey = (customKey || process.env.GEMINI_API_KEY || '').trim();
     if (!apiKey) return null;
     try {
         const ai = new GoogleGenAI({ apiKey });
         const db = readDB();
-        const chatHistory = (db.chats && db.chats[sender]) ? db.chats[sender] : [];
+        const chatHistory = (sender && db.chats && db.chats[sender]) ? db.chats[sender] : [];
+        const validHistory = chatHistory
+            .slice(-8)
+            .filter(m => m && m.content && typeof m.content === 'string')
+            .map(m => ({
+                role: m.role === 'assistant' ? 'model' : 'user',
+                parts: [{ text: String(m.content).slice(0, 1000) }]
+            }));
+
         const contents = [
             { role: 'user', parts: [{ text: `System Instructions:\n${prompt}` }] },
-            { role: 'model', parts: [{ text: "Understood. I will act as the Alpha Mobile WhatsApp Assistant." }] },
-            ...chatHistory.slice(-6).map(m => ({
-                role: m.role === 'assistant' ? 'model' : 'user',
-                parts: [{ text: m.content }]
-            })),
-            { role: 'user', parts: [{ text: userMsg }] }
+            { role: 'model', parts: [{ text: "Understood. I will act as the Alpha Mobile WhatsApp AI Assistant." }] },
+            ...validHistory,
+            { role: 'user', parts: [{ text: String(userMsg) }] }
         ];
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
@@ -440,8 +501,8 @@ async function connectToWhatsApp(sessionId = 'default') {
         }
 
         const { state, saveCreds } = await useMultiFileAuthState(`auth_info_${sessionId}`);
-        const { version, isLatest } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1043857760], isLatest: true }));
-        const msgRetryCounterCache = new NodeCache();
+        const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1043857760], isLatest: true }));
+        const msgRetryCounterCache = new NodeCache({ stdTTL: 5 * 60, useClones: false });
 
         const sock = makeWASocket({
             version,
@@ -450,15 +511,22 @@ async function connectToWhatsApp(sessionId = 'default') {
             browser: Browsers.windows('Firefox'),
             auth: {
                 creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
+                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
             },
             markOnlineOnConnect: true,
-            generateHighQualityLinkPreview: true,
+            generateHighQualityLinkPreview: false,
+            syncFullHistory: false,
+            shouldSyncHistoryMessage: () => false,
+            shouldIgnoreJid: () => false,
             getMessage: async (key) => {
-                return { conversation: '' };
+                return undefined;
             },
             msgRetryCounterCache,
-            defaultQueryTimeoutMs: undefined,
+            defaultQueryTimeoutMs: 60000,
+            connectTimeoutMs: 60000,
+            keepAliveIntervalMs: 25000,
+            retryRequestDelayMs: 250,
+            maxMsgRetryCount: 5,
         });
 
         sock.sessionId = sessionId;
@@ -541,17 +609,36 @@ async function connectToWhatsApp(sessionId = 'default') {
         sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('messages.upsert', async (m) => {
-        if (m.type !== 'notify') return;
-        const msg = m.messages[0];
-        if (!msg.message || msg.key.fromMe) return;
+        try {
+            if (m.type !== 'notify') return;
+            const msg = m.messages?.[0];
+            if (!msg || !msg.message) return;
 
-        const sender = msg.key.remoteJid;
-        let text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+            const sender = msg.key.remoteJid;
+            if (!sender || sender.includes('status@broadcast')) return;
+
+            // Allow self-test if user messages their own number ("Message Yourself")
+            const myJid = sock.user ? jidNormalizedUser(sock.user.id) : null;
+            const isSelfMessage = myJid && (sender === myJid || sender.startsWith(myJid.split('@')[0]));
+            if (msg.key?.fromMe && !isSelfMessage) return;
+
+            // Extract incoming text from all possible message structures
+            let text = msg.message.conversation || 
+                       msg.message.extendedTextMessage?.text || 
+                       msg.message.imageMessage?.caption || 
+                       msg.message.videoMessage?.caption || 
+                       msg.message.documentMessage?.caption ||
+                       msg.message.buttonsResponseMessage?.selectedDisplayText ||
+                       msg.message.buttonsResponseMessage?.selectedButtonId ||
+                       msg.message.templateButtonReplyMessage?.selectedDisplayText ||
+                       msg.message.templateButtonReplyMessage?.selectedId ||
+                       msg.message.listResponseMessage?.title || 
+                       "";
         
         const db = readDB();
         if (!db.shop) db.shop = { products: [], customers: [] };
         if (!db.shop.customers) db.shop.customers = [];
-        const pushName = msg.pushName || "Unknown";
+        const pushName = msg.pushName || "Valued Customer";
         
         let cust = db.shop.customers.find(c => c.jid === sender || c.id === sender);
         if (!cust) {
@@ -567,7 +654,7 @@ async function connectToWhatsApp(sessionId = 'default') {
         // MULTI-MODAL: Image & Voice Recognition (Gemini)
         const hasMedia = msg.message.imageMessage || msg.message.audioMessage;
         if (hasMedia) {
-            const geminiKey = db.settings.geminiKey;
+            const geminiKey = (db.settings.geminiKey || process.env.GEMINI_API_KEY || '').trim();
             if (geminiKey) {
                 try {
                     const buffer = await downloadMediaMessage(msg, 'buffer', { }, { logger: console });
@@ -580,12 +667,10 @@ async function connectToWhatsApp(sessionId = 'default') {
                             { role: 'user', parts: [mediaPart, { text: "You are an AI assistant for a shop. Describe this image in detail or transcribe this audio exactly as it relates to a customer inquiry." }] }
                         ]
                     });
-                    text += ` [MEDIA CONTENT: ${response.text}]`;
+                    text += (text ? " " : "") + `[MEDIA CONTENT: ${response.text}]`;
                 } catch (e) {
                     console.error("Gemini Media Error:", e.message);
                 }
-            } else {
-                text += " [MEDIA ATTACHED - Ignore, Gemini Key not set]";
             }
         }
 
@@ -598,7 +683,7 @@ async function connectToWhatsApp(sessionId = 'default') {
         writeDB(db);
         io.emit('live_message', { to: sender, role: 'user', content: text, timestamp: Date.now() });
 
-        // Check if AI is manually paused
+        // Check if AI is manually paused for this customer
         if (cust.aiPaused) return;
 
         // Analytics tracking
@@ -633,29 +718,40 @@ async function connectToWhatsApp(sessionId = 'default') {
             }
         }
 
-        // 2. AI Reply logic
+        // 2. AI Reply logic with Multi-Engine Cascading Fallback
         try {
             await sock.sendPresenceUpdate('composing', sender);
             
-            let aiPrompt = db.settings?.systemPrompt || "You are a helpful assistant for Alpha Mobile.";
+            let aiPrompt = db.settings?.systemPrompt || "You are a professional, helpful assistant for Alpha Mobile shop.";
             if (db.shop?.products && db.shop.products.length > 0) {
                 const catalog = db.shop.products.map(p => `- ${p.name} (Price: ${p.price}): ${p.details || 'Available'}`).join('\n');
-                aiPrompt += `\n\nAVAILABLE PRODUCTS:\n${catalog}\n\nUse this product information to answer customer queries.`;
+                aiPrompt += `\n\nAVAILABLE PRODUCTS:\n${catalog}\n\nUse this product information to answer customer queries accurately.`;
             }
             
             aiPrompt += "\n\nIMPORTANT INSTRUCTIONS:\nIf the user is asking about bulk/wholesale purchasing, append [SEGMENT: WHOLESALE]. If they purchase high value items consistently, append [SEGMENT: VIP]. If they only ask questions and don't buy, append [SEGMENT: WINDOW_SHOPPER].\n\n[MULTI-LANGUAGE ENGINE ACTIVE]:\n1. You must auto-detect the user's language (Sinhala, Singlish, Tamil, or English).\n2. You MUST reply in the EXACT SAME LANGUAGE and dialect they used.\n3. If they type in Singlish (Sinhala words in English alphabet), you MUST reply in natural Singlish.\n4. If they type in Sinhala Unicode or Tamil, reply in the exact same script.\n5. Always mirror their linguistic style naturally.";
 
             let aiReply = null;
-            if (db.settings?.deepseekKey) {
+            let engineUsed = '';
+
+            // Step A: Attempt DeepSeek AI (if configured)
+            if (db.settings?.deepseekKey?.trim()) {
                 aiReply = await askDeepSeek(aiPrompt, text, sender);
-            } else if (db.settings?.geminiKey || process.env.GEMINI_API_KEY) {
+                if (aiReply) engineUsed = 'DeepSeek';
+            }
+
+            // Step B: If DeepSeek failed or not configured, fallback to Gemini AI
+            if (!aiReply && (db.settings?.geminiKey?.trim() || process.env.GEMINI_API_KEY)) {
                 aiReply = await askGemini(aiPrompt, text, sender, db.settings?.geminiKey);
-            } else {
-                // Built-in intelligent fallback when API keys are not yet added
+                if (aiReply) engineUsed = 'Gemini';
+            }
+
+            // Step C: If both AI services unavailable or returned null, use built-in multilingual shop engine
+            if (!aiReply) {
+                engineUsed = 'Built-in Shop Engine';
                 const lower = text.toLowerCase().trim();
                 if (lower === '.ping' || lower === 'ping') {
                     aiReply = '🏓 Pong! Alpha Mobile Bot is active & online.';
-                } else if (lower.includes('product') || lower.includes('item') || lower.includes('phone') || lower.includes('catalog') || lower.includes('price') || lower.includes('badu')) {
+                } else if (lower.includes('product') || lower.includes('item') || lower.includes('phone') || lower.includes('catalog') || lower.includes('price') || lower.includes('badu') || lower.includes('gana') || lower.includes('mila')) {
                     if (db.shop?.products && db.shop.products.length > 0) {
                         const productList = db.shop.products.map((p, i) => `${i + 1}. *${p.name}* - ${p.price}\n   ${p.details || ''}`).join('\n\n');
                         aiReply = `📱 *ALPHA MOBILE PRODUCTS*\n\n${productList}\n\nTo place an order, reply with the product name, your full name, delivery address, and contact number!`;
@@ -678,6 +774,8 @@ async function connectToWhatsApp(sessionId = 'default') {
                     aiReply = `👋 Hello *${pushName}*! Welcome to *Alpha Mobile*.\n\nHow can we help you today? You can ask about our products, prices, or check your orders!\n\n_Type *products* to see our available items._`;
                 }
             }
+
+            console.log(`[AI-DISPATCH] Answer generated using [${engineUsed}] for ${sender}`);
             
             if (aiReply) {
                 // Check Segments
@@ -767,6 +865,9 @@ async function connectToWhatsApp(sessionId = 'default') {
             }
         } catch (err) {
             console.error("Failed to send AI message", err);
+        }
+        } catch (msgErr) {
+            console.warn(`[WA] Transient error in messages.upsert for ${sessionId}:`, msgErr.message);
         }
     });
     } catch (err) {
@@ -1009,6 +1110,46 @@ app.post('/api/settings', (req, res) => {
     db.settings = { ...(db.settings || {}), ...req.body };
     writeDB(db);
     res.json({ success: true, settings: db.settings });
+});
+
+app.post('/api/test-ai', async (req, res) => {
+    try {
+        const { engine = 'deepseek', apiKey, prompt = 'You are a shop assistant for Alpha Mobile.', message = 'Hello! Please confirm you are online.' } = req.body;
+        const startTime = Date.now();
+
+        if (engine === 'deepseek') {
+            const keyToUse = (apiKey || readDB().settings?.deepseekKey || '').trim();
+            if (!keyToUse) {
+                return res.status(400).json({ success: false, error: 'DeepSeek API Key is empty. Please enter your API key (starting with sk-...).' });
+            }
+            const reply = await askDeepSeek(prompt, message, null, keyToUse);
+            const latency = Date.now() - startTime;
+            if (reply) {
+                return res.json({ success: true, engine: 'DeepSeek Chat', reply, latency });
+            } else {
+                return res.status(400).json({ 
+                    success: false, 
+                    error: 'DeepSeek did not return a response. Possible causes:\n1. Invalid API Key\n2. Insufficient account balance/credit on deepseek.com\n3. DeepSeek API temporary throttling' 
+                });
+            }
+        } else if (engine === 'gemini') {
+            const keyToUse = (apiKey || readDB().settings?.geminiKey || process.env.GEMINI_API_KEY || '').trim();
+            if (!keyToUse) {
+                return res.status(400).json({ success: false, error: 'Gemini API Key is empty. Please enter your Gemini API key.' });
+            }
+            const reply = await askGemini(prompt, message, null, keyToUse);
+            const latency = Date.now() - startTime;
+            if (reply) {
+                return res.json({ success: true, engine: 'Gemini 2.5 Flash', reply, latency });
+            } else {
+                return res.status(400).json({ success: false, error: 'Gemini API request failed. Please verify your API key.' });
+            }
+        } else {
+            return res.status(400).json({ error: 'Unsupported AI engine' });
+        }
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
 });
 
 // Plugin Manager APIs

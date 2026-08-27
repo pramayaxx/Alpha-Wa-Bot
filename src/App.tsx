@@ -48,6 +48,32 @@ export default function App() {
   const [exportedSessionId, setExportedSessionId] = useState<string | null>(null);
   const [copiedExportedId, setCopiedExportedId] = useState(false);
 
+  // AI Connection Test States
+  const [testAiLoading, setTestAiLoading] = useState(false);
+  const [testAiResult, setTestAiResult] = useState<any>(null);
+
+  const runTestAi = async (engine: 'deepseek' | 'gemini') => {
+    setTestAiLoading(true);
+    setTestAiResult(null);
+    try {
+      const res = await fetch('/api/test-ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          engine,
+          apiKey: engine === 'deepseek' ? config.settings?.deepseekKey : config.settings?.geminiKey,
+          prompt: config.settings?.systemPrompt
+        })
+      });
+      const data = await res.json();
+      setTestAiResult(data);
+    } catch (e: any) {
+      setTestAiResult({ success: false, error: e.message });
+    } finally {
+      setTestAiLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (isDarkMode) document.documentElement.classList.add('dark');
     else document.documentElement.classList.remove('dark');
@@ -798,21 +824,112 @@ export default function App() {
                 </div>
                 
                 <div className="pt-6 border-t dark:border-slate-800">
-                  <h3 className="text-xl font-bold mb-4 flex items-center gap-2"><Sparkles size={20} className="text-indigo-500" /> DeepSeek Engine Setup <span className="ml-2 bg-emerald-100 text-emerald-700 text-[10px] px-2 py-0.5 rounded font-bold border border-emerald-200">🌍 MULTI-LANGUAGE AUTO-DETECT ACTIVE</span></h3>
+                  <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                    <h3 className="text-xl font-bold flex items-center gap-2">
+                      <Sparkles size={20} className="text-indigo-500" /> DeepSeek & Gemini AI Engine
+                    </h3>
+                    <span className="bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 text-xs px-2.5 py-1 rounded-full font-bold border border-emerald-300 dark:border-emerald-800 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                      MULTI-LANGUAGE AUTO-DETECT (Sinhala / Singlish / Tamil / English)
+                    </span>
+                  </div>
+
+                  {/* Active AI Engine Banner */}
+                  <div className="mb-5 p-4 rounded-xl border bg-slate-50 dark:bg-slate-800/60 dark:border-slate-700 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Current Active WhatsApp AI Handler</div>
+                      <div className="text-base font-bold text-slate-800 dark:text-slate-100 mt-0.5 flex items-center gap-2">
+                        {config.settings?.deepseekKey ? (
+                          <span className="text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
+                            ⚡ DeepSeek Chat (Primary) + Gemini (Fallback)
+                          </span>
+                        ) : config.settings?.geminiKey ? (
+                          <span className="text-blue-600 dark:text-blue-400 flex items-center gap-1.5">
+                            ⚡ Google Gemini 2.5 Flash
+                          </span>
+                        ) : (
+                          <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+                            ⚙️ Built-in Multilingual Shop Engine & Auto-Fallback
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1">
+                        If DeepSeek key is empty, the bot automatically responds using Gemini AI or the built-in shop engine.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        type="button" 
+                        onClick={() => runTestAi('deepseek')} 
+                        disabled={testAiLoading}
+                        className="px-3.5 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1.5 shadow-sm"
+                      >
+                        {testAiLoading ? 'Testing...' : 'Test DeepSeek Key'}
+                      </button>
+                      <button 
+                        type="button" 
+                        onClick={() => runTestAi('gemini')} 
+                        disabled={testAiLoading}
+                        className="px-3.5 py-2 text-xs font-semibold bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-200 rounded-lg transition-colors disabled:opacity-50"
+                      >
+                        Test Gemini
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Test AI Result Box */}
+                  {testAiResult && (
+                    <div className={`mb-5 p-4 rounded-xl border text-sm animate-fadeIn ${testAiResult.success ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-700 dark:text-rose-300'}`}>
+                      <div className="font-semibold flex items-center justify-between mb-1.5">
+                        <span>{testAiResult.success ? `✅ ${testAiResult.engine} is working perfectly!` : '❌ AI Test Error'}</span>
+                        {testAiResult.latency && <span className="text-xs font-mono opacity-80">{testAiResult.latency}ms latency</span>}
+                      </div>
+                      {testAiResult.reply && (
+                        <div className="mt-2 p-3 bg-white/70 dark:bg-slate-900/70 rounded-lg font-mono text-xs border border-emerald-200 dark:border-emerald-900/50 text-slate-800 dark:text-slate-200 whitespace-pre-wrap">
+                          {testAiResult.reply}
+                        </div>
+                      )}
+                      {testAiResult.error && (
+                        <div className="mt-1 text-xs whitespace-pre-wrap">
+                          {testAiResult.error}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-sm font-medium mb-1">DeepSeek API Key (Core AI)</label>
-                      <input type="password" value={config.settings?.deepseekKey || ''} onChange={e => setConfig({...config, settings: {...config.settings, deepseekKey: e.target.value}})} className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent font-mono mb-4" placeholder="sk-..." />
-                      <label className="block text-sm font-medium mb-1 flex items-center gap-2"><ImageIcon size={16}/> Gemini API Key (Voice & Image Recognition)</label>
-                      <p className="text-xs text-slate-500 mb-2">Required for Voice Notes & Image processing capabilities.</p>
-                      <input type="password" value={config.settings?.geminiKey || ''} onChange={e => setConfig({...config, settings: {...config.settings, geminiKey: e.target.value}})} className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent font-mono" placeholder="AIzaSy..." />
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-sm font-semibold">DeepSeek API Key (Core AI)</label>
+                        <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer" className="text-xs text-indigo-500 hover:underline">Get DeepSeek Key ↗</a>
+                      </div>
+                      <input 
+                        type="password" 
+                        value={config.settings?.deepseekKey || ''} 
+                        onChange={e => setConfig({...config, settings: {...config.settings, deepseekKey: e.target.value}})} 
+                        className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent font-mono mb-4 text-sm" 
+                        placeholder="sk-..." 
+                      />
+                      
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-sm font-semibold flex items-center gap-2"><ImageIcon size={16}/> Gemini API Key (Voice & Image Recognition / Fallback)</label>
+                        <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-xs text-blue-500 hover:underline">Get Gemini Key ↗</a>
+                      </div>
+                      <p className="text-xs text-slate-500 mb-2">Used for Audio/Voice note transcription, product photo scanning, and automatic fallback.</p>
+                      <input 
+                        type="password" 
+                        value={config.settings?.geminiKey || ''} 
+                        onChange={e => setConfig({...config, settings: {...config.settings, geminiKey: e.target.value}})} 
+                        className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent font-mono text-sm" 
+                        placeholder="AIzaSy..." 
+                      />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium mb-1">AI Shop Assistant Persona (System Prompt)</label>
-                      <p className="text-xs text-emerald-600 dark:text-emerald-400 mb-2 font-medium">💡 Pro Tip: To show clickable WhatsApp buttons to users, type "[OPTIONS: Option 1, Option 2]" in your prompt instructions!</p>
-                      <textarea value={config.settings?.systemPrompt || ''} onChange={e => setConfig({...config, settings: {...config.settings, systemPrompt: e.target.value}})} className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent h-40" />
+                      <label className="block text-sm font-semibold mb-1">AI Shop Assistant Persona (System Prompt)</label>
+                      <p className="text-xs text-emerald-600 dark:text-emerald-400 mb-2 font-medium">💡 Pro Tip: To show clickable WhatsApp options to users, type "[OPTIONS: Option 1, Option 2]" in your prompt instructions!</p>
+                      <textarea value={config.settings?.systemPrompt || ''} onChange={e => setConfig({...config, settings: {...config.settings, systemPrompt: e.target.value}})} className="w-full p-3 rounded-lg border dark:bg-slate-800 dark:border-slate-700 bg-transparent h-40 font-mono text-xs leading-relaxed" />
                     </div>
-                    <button onClick={saveConfig} className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors flex items-center gap-2"><Save size={18} /> Save All Configurations</button>
+                    <button onClick={saveConfig} className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors flex items-center gap-2 shadow-md"><Save size={18} /> Save All Configurations</button>
                   </div>
                 </div>
               </div>
