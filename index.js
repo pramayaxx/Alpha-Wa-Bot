@@ -6,7 +6,7 @@ const { execSync } = require('child_process');
 const pino = require('pino');
 const { Server } = require('socket.io');
 const PDFDocument = require('pdfkit');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, makeCacheableSignalKeyStore, jidNormalizedUser, fetchLatestBaileysVersion, Browsers, downloadMediaMessage, delay } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, makeCacheableSignalKeyStore, jidNormalizedUser, fetchLatestBaileysVersion, fetchLatestWaWebVersion, Browsers, downloadMediaMessage, delay } = require('@whiskeysockets/baileys');
 const NodeCache = require('node-cache');
 const { GoogleGenAI } = require('@google/genai');
 const { File: MegaFile } = require('megajs');
@@ -462,6 +462,41 @@ async function parseAndSaveSessionId(rawSessionId, targetSession = 'default') {
     };
 }
 
+// Unwrap ephemeral, view-once, and container wrappers
+function unwrapMessage(msg) {
+    if (!msg) return null;
+    let m = msg.message;
+    if (!m) return null;
+    let iterations = 0;
+    while (m && (m.ephemeralMessage || m.viewOnceMessage || m.viewOnceMessageV2 || m.documentWithCaptionMessage) && iterations < 5) {
+        m = m.ephemeralMessage?.message || 
+            m.viewOnceMessage?.message || 
+            m.viewOnceMessageV2?.message || 
+            m.documentWithCaptionMessage?.message || 
+            m;
+        iterations++;
+    }
+    return m;
+}
+
+function extractMessageText(msg) {
+    const m = unwrapMessage(msg);
+    if (!m) return "";
+    
+    return m.conversation || 
+           m.extendedTextMessage?.text || 
+           m.imageMessage?.caption || 
+           m.videoMessage?.caption || 
+           m.documentMessage?.caption ||
+           m.buttonsResponseMessage?.selectedDisplayText ||
+           m.buttonsResponseMessage?.selectedButtonId ||
+           m.templateButtonReplyMessage?.selectedDisplayText ||
+           m.templateButtonReplyMessage?.selectedId ||
+           m.listResponseMessage?.title || 
+           m.interactiveResponseMessage?.body?.text ||
+           "";
+}
+
 // --- DYNAMIC PLUGIN LOADER ---
 const pluginsDir = path.join(__dirname, 'plugins');
 if (!fs.existsSync(pluginsDir)) fs.mkdirSync(pluginsDir);
@@ -501,14 +536,23 @@ async function connectToWhatsApp(sessionId = 'default') {
         }
 
         const { state, saveCreds } = await useMultiFileAuthState(`auth_info_${sessionId}`);
-        const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1043857760], isLatest: true }));
+        let version = [2, 3000, 1046189332];
+        try {
+            const vRes = await fetchLatestWaWebVersion();
+            if (vRes?.version) version = vRes.version;
+        } catch (e) {
+            try {
+                const vRes2 = await fetchLatestBaileysVersion();
+                if (vRes2?.version) version = vRes2.version;
+            } catch (_) {}
+        }
         const msgRetryCounterCache = new NodeCache({ stdTTL: 5 * 60, useClones: false });
 
         const sock = makeWASocket({
             version,
             logger: pino({ level: 'silent' }),
             printQRInTerminal: false,
-            browser: Browsers.windows('Firefox'),
+            browser: Browsers.ubuntu('Chrome'),
             auth: {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
@@ -610,30 +654,20 @@ async function connectToWhatsApp(sessionId = 'default') {
 
     sock.ev.on('messages.upsert', async (m) => {
         try {
-            if (m.type !== 'notify') return;
-            const msg = m.messages?.[0];
-            if (!msg || !msg.message) return;
+            if (m.type !== 'notify' || !Array.isArray(m.messages)) return;
+            for (const msg of m.messages) {
+                if (!msg || !msg.message) continue;
 
-            const sender = msg.key.remoteJid;
-            if (!sender || sender.includes('status@broadcast')) return;
+                const sender = msg.key.remoteJid;
+                if (!sender || sender.includes('status@broadcast')) continue;
 
-            // Allow self-test if user messages their own number ("Message Yourself")
-            const myJid = sock.user ? jidNormalizedUser(sock.user.id) : null;
-            const isSelfMessage = myJid && (sender === myJid || sender.startsWith(myJid.split('@')[0]));
-            if (msg.key?.fromMe && !isSelfMessage) return;
+                const cleanSender = jidNormalizedUser(sender);
+                const myJid = sock.user ? jidNormalizedUser(sock.user.id) : null;
+                const isSelfMessage = myJid && (cleanSender === myJid);
+                if (msg.key?.fromMe && !isSelfMessage) continue;
 
-            // Extract incoming text from all possible message structures
-            let text = msg.message.conversation || 
-                       msg.message.extendedTextMessage?.text || 
-                       msg.message.imageMessage?.caption || 
-                       msg.message.videoMessage?.caption || 
-                       msg.message.documentMessage?.caption ||
-                       msg.message.buttonsResponseMessage?.selectedDisplayText ||
-                       msg.message.buttonsResponseMessage?.selectedButtonId ||
-                       msg.message.templateButtonReplyMessage?.selectedDisplayText ||
-                       msg.message.templateButtonReplyMessage?.selectedId ||
-                       msg.message.listResponseMessage?.title || 
-                       "";
+                // Extract incoming text with full unwrapping of ephemeral / view-once wrappers
+                let text = extractMessageText(msg);
         
         const db = readDB();
         if (!db.shop) db.shop = { products: [], customers: [] };
@@ -652,14 +686,15 @@ async function connectToWhatsApp(sessionId = 'default') {
         loadPlugins(sock, msg, sessionId);
 
         // MULTI-MODAL: Image & Voice Recognition (Gemini)
-        const hasMedia = msg.message.imageMessage || msg.message.audioMessage;
+        const innerMsg = unwrapMessage(msg);
+        const hasMedia = innerMsg?.imageMessage || innerMsg?.audioMessage;
         if (hasMedia) {
             const geminiKey = (db.settings.geminiKey || process.env.GEMINI_API_KEY || '').trim();
             if (geminiKey) {
                 try {
                     const buffer = await downloadMediaMessage(msg, 'buffer', { }, { logger: console });
                     const ai = new GoogleGenAI({ apiKey: geminiKey });
-                    const mime = msg.message.imageMessage ? msg.message.imageMessage.mimetype : msg.message.audioMessage.mimetype;
+                    const mime = innerMsg.imageMessage ? innerMsg.imageMessage.mimetype : innerMsg.audioMessage.mimetype;
                     const mediaPart = { inlineData: { data: buffer.toString("base64"), mimeType: mime } };
                     const response = await ai.models.generateContent({
                         model: "gemini-2.5-flash",
@@ -866,6 +901,7 @@ async function connectToWhatsApp(sessionId = 'default') {
         } catch (err) {
             console.error("Failed to send AI message", err);
         }
+            } // end for msg
         } catch (msgErr) {
             console.warn(`[WA] Transient error in messages.upsert for ${sessionId}:`, msgErr.message);
         }
