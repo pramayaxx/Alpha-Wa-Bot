@@ -295,8 +295,23 @@ function loadPlugins(sock, msg, sessionId) {
 }
 
 // --- WHATSAPP CORE ---
-async function connectToWhatsApp(sessionId = 'default', pairingPhoneNumber = null) {
+async function connectToWhatsApp(sessionId = 'default') {
     try {
+        const credsPath = path.join(__dirname, `auth_info_${sessionId}`, 'creds.json');
+        const hasCreds = fs.existsSync(credsPath);
+
+        if (!hasCreds) {
+            console.log(`[WA] Session "${sessionId}" is waiting for Session ID input.`);
+            setBotState(sessionId, { 
+                status: 'offline', 
+                qr: null, 
+                pairingCode: null, 
+                pairingError: null,
+                user: null 
+            });
+            return;
+        }
+
         const { state, saveCreds } = await useMultiFileAuthState(`auth_info_${sessionId}`);
         const { version, isLatest } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1043857760], isLatest: true }));
         const msgRetryCounterCache = new NodeCache();
@@ -320,37 +335,11 @@ async function connectToWhatsApp(sessionId = 'default', pairingPhoneNumber = nul
         });
 
         sock.sessionId = sessionId;
-        sock.pairingPhone = pairingPhoneNumber;
         activeSessions.set(sessionId, sock);
-        let pairingCodeRequested = false;
-
-        // If pairing phone number is provided, trigger pairing code request after socket initializes
-        if (pairingPhoneNumber && !sock.authState.creds.registered) {
-            setTimeout(async () => {
-                if (activeSessions.get(sessionId) !== sock) return;
-                if (!pairingCodeRequested && !sock.authState.creds.registered) {
-                    pairingCodeRequested = true;
-                    try {
-                        let code = await sock.requestPairingCode(pairingPhoneNumber);
-                        code = code?.match(/.{1,4}/g)?.join("-") || code;
-                        console.log(`[WA] Pairing code generated for ${sessionId} (${pairingPhoneNumber}): ${code}`);
-                        setBotState(sessionId, { pairingCode: code, pairedPhone: pairingPhoneNumber, qr: null, status: 'pairing', pairingError: null });
-                    } catch (e) {
-                        console.error(`[WA] Pairing code request error for ${sessionId}:`, e.message);
-                        setBotState(sessionId, { pairingCode: 'ERROR', pairingError: e.message, status: 'error' });
-                    }
-                }
-            }, 3000);
-        }
 
         sock.ev.on('connection.update', async (update) => {
             if (activeSessions.get(sessionId) !== sock) return;
-            const { connection, lastDisconnect, qr } = update;
-            
-            if (qr && !pairingPhoneNumber && !sock.authState.creds.registered) {
-                console.log(`[WA] QR Code ready for ${sessionId}. Length: ${qr.length}`);
-                setBotState(sessionId, { qr: qr, pairingCode: null, status: 'connecting', pairingError: null });
-            }
+            const { connection, lastDisconnect } = update;
 
             if (connection === 'close') {
                 if (activeSessions.get(sessionId) !== sock) return;
@@ -363,13 +352,16 @@ async function connectToWhatsApp(sessionId = 'default', pairingPhoneNumber = nul
                 activeSessions.delete(sessionId);
 
                 if (shouldReconnect) {
-                    const credsPath = path.join(__dirname, `auth_info_${sessionId}`, 'creds.json');
-                    const hasCreds = fs.existsSync(credsPath);
-                    setBotState(sessionId, { 
-                        status: hasCreds ? 'connecting' : 'connecting',
-                        pairingError: null
-                    });
-                    setTimeout(() => connectToWhatsApp(sessionId), 2000); 
+                    const currentCredsPath = path.join(__dirname, `auth_info_${sessionId}`, 'creds.json');
+                    if (fs.existsSync(currentCredsPath)) {
+                        setBotState(sessionId, { 
+                            status: 'connecting',
+                            pairingError: null
+                        });
+                        setTimeout(() => connectToWhatsApp(sessionId), 2500);
+                    } else {
+                        setBotState(sessionId, { status: 'offline', qr: null, pairingCode: null, user: null });
+                    }
                 } else {
                     if (isLoggedOut && fs.existsSync(`auth_info_${sessionId}`)) {
                         fs.rmSync(`auth_info_${sessionId}`, { recursive: true, force: true });

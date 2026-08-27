@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { QRCodeSVG } from 'qrcode.react';
 import { io } from 'socket.io-client';
-import { Clock, ShoppingCart, Smartphone, Plus, Bot, Puzzle, RefreshCcw, Check, Terminal, PlayCircle, Shield, Lock, LogOut, MessageSquare, Sparkles, Save, Server, Code, LayoutDashboard, Package, TrendingUp, Users, PauseCircle, Play, Image as ImageIcon, Mic, Copy, CheckCheck, QrCode, KeyRound, AlertCircle, Wifi, WifiOff, Send, Key, FileCode, ExternalLink, ArrowRight } from 'lucide-react';
+import { Clock, ShoppingCart, Smartphone, Plus, Bot, Puzzle, RefreshCcw, Check, Terminal, PlayCircle, Shield, Lock, LogOut, MessageSquare, Sparkles, Save, Server, Code, LayoutDashboard, Package, TrendingUp, Users, PauseCircle, Play, Image as ImageIcon, Mic, Copy, CheckCheck, AlertCircle, Wifi, WifiOff, Send, Key, FileCode, ExternalLink, ArrowRight } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 
 const socket = io();
@@ -17,8 +16,7 @@ export default function App() {
   const [selectedChat, setSelectedChat] = useState<string | null>(null);
   const [liveMessage, setLiveMessage] = useState('');
   const [broadcastSegment, setBroadcastSegment] = useState('ALL');
-  const [botState, setBotState] = useState({ status: 'offline', pairingCode: null, pairingError: null, qr: null });
-  const [phoneInput, setPhoneInput] = useState('');
+  const [botState, setBotState] = useState<any>({ status: 'offline' });
   const [config, setConfig] = useState<any>({ shop: {}, settings: { deepseekKey: '', systemPrompt: '' }, plugins: [] });
   const [plugins, setPlugins] = useState<string[]>([]);
   const [newPluginName, setNewPluginName] = useState('');
@@ -43,16 +41,12 @@ export default function App() {
   const [testSuccess, setTestSuccess] = useState<string | null>(null);
 
   // Session ID Connection Mode States
-  const [connectMethod, setConnectMethod] = useState<'session_id' | 'pairing_code' | 'qr'>('session_id');
   const [sessionIdInput, setSessionIdInput] = useState('');
   const [isImportingSession, setIsImportingSession] = useState(false);
   const [sessionImportError, setSessionImportError] = useState<string | null>(null);
   const [sessionImportSuccess, setSessionImportSuccess] = useState<string | null>(null);
   const [exportedSessionId, setExportedSessionId] = useState<string | null>(null);
   const [copiedExportedId, setCopiedExportedId] = useState(false);
-
-  const [copiedCode, setCopiedCode] = useState(false);
-  const [isRefreshingQR, setIsRefreshingQR] = useState(false);
 
   useEffect(() => {
     if (isDarkMode) document.documentElement.classList.add('dark');
@@ -122,22 +116,6 @@ export default function App() {
     }
   };
 
-  const requestPairingCode = async () => {
-    if (!phoneInput) return alert("Please enter your WhatsApp phone number (e.g., 94771234567)");
-    setBotState(prev => ({ ...prev, pairingCode: 'GENERATING...', pairingError: null }));
-    try {
-      const res = await fetch('/api/pair', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: phoneInput, sessionId })
-      });
-      const data = await res.json();
-      if (data.code) setBotState(prev => ({ ...prev, pairingCode: data.code }));
-      else setBotState(prev => ({ ...prev, pairingCode: 'ERROR', pairingError: data.error || 'Failed to get code' }));
-    } catch (e: any) {
-      setBotState(prev => ({ ...prev, pairingCode: 'ERROR', pairingError: e.message }));
-    }
-  };
-
   const connectWithSessionId = async () => {
     if (!sessionIdInput.trim()) {
       alert("Please paste your WhatsApp Session ID string.");
@@ -185,29 +163,6 @@ export default function App() {
     } catch (e: any) {
       alert('Error: ' + e.message);
     }
-  };
-
-  const refreshQR = async () => {
-    setIsRefreshingQR(true);
-    try {
-      await fetch('/api/qr/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId })
-      });
-      setTimeout(() => {
-        loadData();
-        setIsRefreshingQR(false);
-      }, 1000);
-    } catch (e) {
-      setIsRefreshingQR(false);
-    }
-  };
-
-  const copyPairingCode = (code: string) => {
-    navigator.clipboard.writeText(code);
-    setCopiedCode(true);
-    setTimeout(() => setCopiedCode(false), 2500);
   };
 
   const resetSession = async () => {
@@ -585,298 +540,107 @@ export default function App() {
                     </div>
                   ) : (
                     <div className="space-y-6">
-                      {/* Connection Method Selector Tabs */}
-                      <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-100 dark:bg-slate-800/80 rounded-2xl w-fit">
-                        <button
-                          onClick={() => setConnectMethod('session_id')}
-                          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
-                            connectMethod === 'session_id'
-                              ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/20'
-                              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                          }`}
-                        >
-                          <Key size={15} />
-                          <span>Use Session ID (Recommended)</span>
-                        </button>
-
-                        <button
-                          onClick={() => setConnectMethod('pairing_code')}
-                          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
-                            connectMethod === 'pairing_code'
-                              ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/20'
-                              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                          }`}
-                        >
-                          <KeyRound size={15} />
-                          <span>8-Digit Pair Code</span>
-                        </button>
-
-                        <button
-                          onClick={() => setConnectMethod('qr')}
-                          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
-                            connectMethod === 'qr'
-                              ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/20'
-                              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                          }`}
-                        >
-                          <QrCode size={15} />
-                          <span>Scan QR Code</span>
-                        </button>
-                      </div>
-
-                      {/* Method 1: SESSION ID IMPORT (PRIMARY) */}
-                      {connectMethod === 'session_id' && (
-                        <div className="bg-slate-50 dark:bg-slate-800/40 p-6 md:p-8 rounded-2xl border border-indigo-100 dark:border-indigo-900/30">
-                          <div className="max-w-2xl">
-                            <div className="flex items-center gap-2.5 text-indigo-600 dark:text-indigo-400 font-bold mb-2">
-                              <Key size={20} />
-                              <span className="text-base sm:text-lg">Connect Bot Using Generated Session ID</span>
-                            </div>
-                            <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">
-                              Paste the <b>Session ID</b> (e.g. <code className="font-mono text-indigo-600 dark:text-indigo-400 font-bold bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded">SHADOW~...</code> or base64 credentials) generated from your deployed <b>Paircode-Session-ID-Generator</b> web application.
-                            </p>
-
-                            <div className="space-y-4">
-                              <div className="relative">
-                                <textarea
-                                  rows={4}
-                                  value={sessionIdInput}
-                                  onChange={e => setSessionIdInput(e.target.value)}
-                                  placeholder="Paste Session ID here (e.g. SHADOW~eyJub2lzZUtleSI6... or raw base64 string)"
-                                  className="w-full px-4 py-3.5 rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none font-mono text-xs text-slate-800 dark:text-slate-200 transition-all resize-none shadow-inner"
-                                />
-                                {sessionIdInput && (
-                                  <button
-                                    onClick={() => setSessionIdInput('')}
-                                    className="absolute top-3 right-3 text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg"
-                                  >
-                                    Clear
-                                  </button>
-                                )}
-                              </div>
-
-                              <div className="flex flex-col sm:flex-row items-center gap-3">
-                                <button
-                                  onClick={connectWithSessionId}
-                                  disabled={isImportingSession || !sessionIdInput.trim()}
-                                  className="w-full sm:w-auto px-8 py-3.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold text-sm shadow-md shadow-indigo-600/20 transition-all cursor-pointer flex items-center justify-center gap-2"
-                                >
-                                  {isImportingSession ? (
-                                    <>
-                                      <RefreshCcw size={16} className="animate-spin" />
-                                      <span>Connecting WhatsApp Session...</span>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <span>Connect Bot with Session ID</span>
-                                      <ArrowRight size={16} />
-                                    </>
-                                  )}
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={async () => {
-                                    try {
-                                      const text = await navigator.clipboard.readText();
-                                      if (text) setSessionIdInput(text.trim());
-                                    } catch(e) {
-                                      alert("Please allow clipboard permissions or paste manually.");
-                                    }
-                                  }}
-                                  className="w-full sm:w-auto px-5 py-3.5 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                                >
-                                  <Copy size={14} />
-                                  <span>Paste from Clipboard</span>
-                                </button>
-                              </div>
-
-                              {sessionImportSuccess && (
-                                <div className="p-4 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 rounded-xl border border-emerald-200 dark:border-emerald-900 text-xs font-semibold flex items-center gap-2">
-                                  <CheckCheck size={16} className="shrink-0" />
-                                  <span>{sessionImportSuccess}</span>
-                                </div>
-                              )}
-
-                              {sessionImportError && (
-                                <div className="p-4 bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 rounded-xl border border-rose-200 dark:border-rose-900 text-xs font-medium flex items-center gap-2">
-                                  <AlertCircle size={16} className="shrink-0" />
-                                  <span>{sessionImportError}</span>
-                                </div>
-                              )}
-                            </div>
-
-                            {/* Helpful Guide */}
-                            <div className="mt-8 pt-6 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500 space-y-2">
-                              <p className="font-bold text-slate-700 dark:text-slate-300">How to use Session ID:</p>
-                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
-                                <div className="p-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-                                  <span className="font-bold text-indigo-600 block mb-1">1. Generate Session</span>
-                                  <span>Open your deployed Session ID generator web app and scan QR or pair your number.</span>
-                                </div>
-                                <div className="p-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-                                  <span className="font-bold text-indigo-600 block mb-1">2. Copy Session ID</span>
-                                  <span>Copy the code sent to your WhatsApp (starts with <code className="font-mono">SHADOW~</code>, <code className="font-mono">ALPHA~</code>, or base64).</span>
-                                </div>
-                                <div className="p-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-                                  <span className="font-bold text-indigo-600 block mb-1">3. Instant Connect</span>
-                                  <span>Paste it in the box above and click Connect. The bot becomes active immediately!</span>
-                                </div>
-                              </div>
-                            </div>
+                      {/* Direct Session ID Connection Center */}
+                      <div className="bg-slate-50 dark:bg-slate-800/40 p-6 md:p-8 rounded-2xl border border-indigo-100 dark:border-indigo-900/30">
+                        <div className="max-w-3xl">
+                          <div className="flex items-center gap-2.5 text-indigo-600 dark:text-indigo-400 font-bold mb-2">
+                            <Key size={22} />
+                            <span className="text-lg sm:text-xl">Connect WhatsApp Bot via Session ID</span>
                           </div>
-                        </div>
-                      )}
-
-                      {/* Method 2: Pairing Code */}
-                      {connectMethod === 'pairing_code' && (
-                        <div className="bg-slate-50 dark:bg-slate-800/40 p-6 md:p-8 rounded-2xl border border-slate-200/80 dark:border-slate-800 max-w-2xl">
-                          <div className="flex items-center gap-2.5 text-indigo-600 dark:text-indigo-400 font-bold mb-3">
-                            <KeyRound size={18} />
-                            <span>Link with Phone Number (8-Digit Code)</span>
-                          </div>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
-                            Connect directly by generating an 8-digit linking code for your WhatsApp number:
+                          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">
+                            Generate your <b>Session ID</b> using your external Pair Code / QR Generator web application, then paste it here to activate the bot.
                           </p>
 
-                          <div className="space-y-3">
-                            <div>
-                              <input 
-                                value={phoneInput} 
-                                onChange={e => setPhoneInput(e.target.value)} 
-                                placeholder="e.g. 0771234567 or 94771234567" 
-                                className="w-full px-4 py-3.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none font-mono text-base transition-all" 
+                          <div className="space-y-4">
+                            <div className="relative">
+                              <textarea
+                                rows={4}
+                                value={sessionIdInput}
+                                onChange={e => setSessionIdInput(e.target.value)}
+                                placeholder="Paste your Session ID string here (e.g. SHADOW~eyJub2lzZUtleSI6... or raw base64 credentials)"
+                                className="w-full px-4 py-3.5 rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none font-mono text-xs text-slate-800 dark:text-slate-200 transition-all resize-none shadow-inner"
                               />
-                              {phoneInput && (
-                                <div className="mt-1.5 flex items-center justify-between text-xs text-slate-500">
-                                  <span>WhatsApp target number:</span>
-                                  <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
-                                    +{phoneInput.replace(/[^0-9]/g, '').startsWith('0') ? '94' + phoneInput.replace(/[^0-9]/g, '').substring(1) : (phoneInput.replace(/[^0-9]/g, '').length === 9 && phoneInput.replace(/[^0-9]/g, '').startsWith('7') ? '94' + phoneInput.replace(/[^0-9]/g, '') : phoneInput.replace(/[^0-9]/g, ''))}
-                                  </span>
-                                </div>
+                              {sessionIdInput && (
+                                <button
+                                  onClick={() => setSessionIdInput('')}
+                                  className="absolute top-3 right-3 text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg"
+                                >
+                                  Clear
+                                </button>
                               )}
                             </div>
 
-                            <button 
-                              onClick={requestPairingCode} 
-                              disabled={botState.pairingCode === 'GENERATING...'}
-                              className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold text-sm shadow-md shadow-indigo-500/20 transition-all cursor-pointer flex items-center justify-center gap-2"
-                            >
-                              {botState.pairingCode === 'GENERATING...' ? (
-                                <>
-                                  <RefreshCcw size={16} className="animate-spin" />
-                                  <span>Requesting Code from WhatsApp...</span>
-                                </>
-                              ) : (
-                                <span>{botState.pairingCode && botState.pairingCode !== 'ERROR' ? 'Request Fresh Code' : 'Get 8-Digit Pairing Code'}</span>
-                              )}
-                            </button>
-                          </div>
+                            <div className="flex flex-col sm:flex-row items-center gap-3">
+                              <button
+                                onClick={connectWithSessionId}
+                                disabled={isImportingSession || !sessionIdInput.trim()}
+                                className="w-full sm:w-auto px-8 py-3.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold text-sm shadow-md shadow-indigo-600/20 transition-all cursor-pointer flex items-center justify-center gap-2"
+                              >
+                                {isImportingSession ? (
+                                  <>
+                                    <RefreshCcw size={16} className="animate-spin" />
+                                    <span>Connecting WhatsApp Session...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span>Connect Bot with Session ID</span>
+                                    <ArrowRight size={16} />
+                                  </>
+                                )}
+                              </button>
 
-                          {/* Code Display Area */}
-                          {botState.pairingCode && botState.pairingCode !== 'GENERATING...' && botState.pairingCode !== 'ERROR' && (
-                            <div className="mt-5 p-5 bg-indigo-50/80 dark:bg-indigo-950/40 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 text-center">
-                              <div className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 mb-2">
-                                Enter this code in WhatsApp on your phone:
-                              </div>
-                              
-                              {/* Character Boxes */}
-                              <div className="flex items-center justify-center gap-1.5 sm:gap-2 my-3 select-all">
-                                {botState.pairingCode.replace(/[^A-Za-z0-9]/g, '').split('').map((char: string, i: number) => (
-                                  <React.Fragment key={i}>
-                                    {i === 4 && <span className="text-xl font-bold text-slate-400 mx-0.5 sm:mx-1">-</span>}
-                                    <div className="w-8 h-10 sm:w-10 sm:h-12 bg-white dark:bg-slate-900 border-2 border-indigo-500/70 rounded-lg flex items-center justify-center font-mono font-black text-xl sm:text-2xl text-indigo-600 dark:text-indigo-400 shadow-sm">
-                                      {char}
-                                    </div>
-                                  </React.Fragment>
-                                ))}
-                              </div>
-
-                              <div className="text-[12px] text-slate-600 dark:text-slate-400 mb-3">
-                                <b>Raw Code:</b> <span className="font-mono font-bold tracking-widest text-indigo-600 dark:text-indigo-400">{botState.pairingCode}</span>
-                              </div>
-
-                              <div className="flex items-center justify-center gap-3">
-                                <button 
-                                  onClick={() => copyPairingCode(botState.pairingCode!)}
-                                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow-sm hover:bg-indigo-700 transition-colors cursor-pointer"
-                                >
-                                  {copiedCode ? <CheckCheck size={14} /> : <Copy size={14} />}
-                                  <span>{copiedCode ? 'Copied to Clipboard!' : 'Copy Code'}</span>
-                                </button>
-                                <button 
-                                  onClick={requestPairingCode}
-                                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold border border-slate-200 dark:border-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
-                                >
-                                  <RefreshCcw size={13} />
-                                  <span>New Code</span>
-                                </button>
-                              </div>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    const text = await navigator.clipboard.readText();
+                                    if (text) setSessionIdInput(text.trim());
+                                  } catch(e) {
+                                    alert("Please allow clipboard permissions or paste manually into the text box.");
+                                  }
+                                }}
+                                className="w-full sm:w-auto px-5 py-3.5 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                              >
+                                <Copy size={14} />
+                                <span>Paste from Clipboard</span>
+                              </button>
                             </div>
-                          )}
 
-                          {botState.pairingError && (
-                            <div className="mt-4 p-3 bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 rounded-xl border border-rose-200 dark:border-rose-900 text-xs font-medium flex items-center gap-2">
-                              <AlertCircle size={16} className="shrink-0" />
-                              <span>{botState.pairingError}</span>
-                            </div>
-                          )}
-
-                          {/* Step Instructions */}
-                          <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-800 text-[12px] text-slate-500 space-y-1.5">
-                            <p className="font-bold text-slate-700 dark:text-slate-300">Important linking steps:</p>
-                            <p>1. Open WhatsApp on the phone with the <b>exact phone number</b> entered above.</p>
-                            <p>2. Tap <b>⋮</b> or <b>Settings</b> &gt; <b>Linked Devices</b> &gt; <b>Link a Device</b>.</p>
-                            <p>3. Tap <b>"Link with phone number instead"</b> at the bottom of the QR scanner.</p>
-                            <p>4. Type the 8 letters shown above.</p>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Method 3: QR Code */}
-                      {connectMethod === 'qr' && (
-                        <div className="bg-slate-50 dark:bg-slate-800/40 p-6 md:p-8 rounded-2xl border border-slate-200/80 dark:border-slate-800 max-w-md text-center">
-                          <div className="flex items-center justify-center gap-2 text-indigo-600 dark:text-indigo-400 font-bold mb-3">
-                            <QrCode size={18} />
-                            <span>Scan QR Code with WhatsApp</span>
-                          </div>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 mb-6">
-                            Point your WhatsApp camera scanner at this QR code to connect instantly:
-                          </p>
-
-                          <div className="flex justify-center mb-5">
-                            {botState.qr ? (
-                              <div className="p-4 bg-white rounded-2xl shadow-md border border-slate-200 inline-block">
-                                <QRCodeSVG value={botState.qr} size={220} level="M" />
+                            {sessionImportSuccess && (
+                              <div className="p-4 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 rounded-xl border border-emerald-200 dark:border-emerald-900 text-xs font-semibold flex items-center gap-2">
+                                <CheckCheck size={16} className="shrink-0" />
+                                <span>{sessionImportSuccess}</span>
                               </div>
-                            ) : (
-                              <div className="w-[220px] h-[220px] rounded-2xl border-2 border-dashed border-slate-300 dark:border-slate-700 flex flex-col items-center justify-center bg-white/60 dark:bg-slate-900/60 p-4">
-                                <RefreshCcw size={28} className="text-slate-400 animate-spin mb-3" />
-                                <span className="text-xs font-semibold text-slate-500">Generating Live QR...</span>
-                                <span className="text-[11px] text-slate-400 mt-1">Please wait a moment</span>
+                            )}
+
+                            {sessionImportError && (
+                              <div className="p-4 bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 rounded-xl border border-rose-200 dark:border-rose-900 text-xs font-medium flex items-center gap-2">
+                                <AlertCircle size={16} className="shrink-0" />
+                                <span>{sessionImportError}</span>
                               </div>
                             )}
                           </div>
 
-                          <div className="flex items-center justify-center gap-3 mb-6">
-                            <button 
-                              onClick={refreshQR} 
-                              disabled={isRefreshingQR}
-                              className="inline-flex items-center gap-1.5 px-4 py-2 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold border border-slate-200 dark:border-slate-700 shadow-xs transition-colors cursor-pointer"
-                            >
-                              <RefreshCcw size={14} className={isRefreshingQR ? 'animate-spin' : ''} />
-                              <span>{isRefreshingQR ? 'Refreshing...' : 'Refresh QR Code'}</span>
-                            </button>
-                          </div>
-
-                          {/* Step Instructions */}
-                          <div className="pt-4 border-t border-slate-200 dark:border-slate-800 text-[12px] text-slate-500 text-left space-y-1.5">
-                            <p className="font-bold text-slate-700 dark:text-slate-300">How to scan with WhatsApp:</p>
-                            <p>1. Open WhatsApp on your phone &gt; <b>Linked Devices</b>.</p>
-                            <p>2. Tap <b>Link a Device</b> and point your camera at the QR code.</p>
+                          {/* Step-by-Step Connection Instructions */}
+                          <div className="mt-8 pt-6 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500 space-y-2">
+                            <p className="font-bold text-slate-700 dark:text-slate-300">How to connect with your Session ID:</p>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                              <div className="p-3.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
+                                <span className="font-bold text-indigo-600 block mb-1">1. Generate Session ID</span>
+                                <span className="leading-relaxed">Open your deployed Pair Code / QR Generator web app and link your WhatsApp number.</span>
+                              </div>
+                              <div className="p-3.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
+                                <span className="font-bold text-indigo-600 block mb-1">2. Copy Received Code</span>
+                                <span className="leading-relaxed">Copy the Session ID message sent to your WhatsApp (starts with <code className="font-mono">SHADOW~</code> or base64).</span>
+                              </div>
+                              <div className="p-3.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
+                                <span className="font-bold text-indigo-600 block mb-1">3. Paste & Connect</span>
+                                <span className="leading-relaxed">Paste the code in the box above and click <b>Connect Bot</b>. The bot goes online instantly.</span>
+                              </div>
+                            </div>
                           </div>
                         </div>
-                      )}
+                      </div>
                     </div>
                   )}
                 </div>
