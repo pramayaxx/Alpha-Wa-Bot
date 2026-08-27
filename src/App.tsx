@@ -543,13 +543,36 @@ export default function App() {
                       {/* Direct Session ID Connection Center */}
                       <div className="bg-slate-50 dark:bg-slate-800/40 p-6 md:p-8 rounded-2xl border border-indigo-100 dark:border-indigo-900/30">
                         <div className="max-w-3xl">
-                          <div className="flex items-center gap-2.5 text-indigo-600 dark:text-indigo-400 font-bold mb-2">
-                            <Key size={22} />
-                            <span className="text-lg sm:text-xl">Connect WhatsApp Bot via Session ID</span>
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+                            <div className="flex items-center gap-2.5 text-indigo-600 dark:text-indigo-400 font-bold">
+                              <Key size={22} />
+                              <span className="text-lg sm:text-xl">Connect WhatsApp Bot via Session ID</span>
+                            </div>
+                            <a
+                              href="https://paircode-session-id-generator.onrender.com/"
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/80 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 rounded-xl font-bold text-xs transition-colors w-fit"
+                            >
+                              <span>Open Session ID Generator Web</span>
+                              <ExternalLink size={14} />
+                            </a>
                           </div>
-                          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">
-                            Generate your <b>Session ID</b> using your external Pair Code / QR Generator web application, then paste it here to activate the bot.
+
+                          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
+                            Paste the <b>Session ID</b> or the entire message received from your generator web app (<a href="https://paircode-session-id-generator.onrender.com/" target="_blank" rel="noreferrer" className="text-indigo-600 underline font-semibold">paircode-session-id-generator</a>) to instantly link this WhatsApp bot.
                           </p>
+
+                          {/* Quick Format Examples */}
+                          <div className="mb-5 p-3.5 bg-indigo-50/70 dark:bg-indigo-950/40 rounded-xl border border-indigo-100 dark:border-indigo-900/50 text-xs text-indigo-900 dark:text-indigo-200">
+                            <span className="font-bold block mb-1.5 text-indigo-700 dark:text-indigo-300">💡 Accepted Session ID Formats:</span>
+                            <ul className="list-disc list-inside space-y-1 font-mono text-[11px] text-slate-700 dark:text-slate-300">
+                              <li><span className="font-sans font-medium text-slate-500 dark:text-slate-400">Mega Format: </span>GlobalTechInfo/MEGA-MD_eRyqLeLT#your_key</li>
+                              <li><span className="font-sans font-medium text-slate-500 dark:text-slate-400">Mega Direct Link: </span>https://mega.nz/file/eRyqLeLT#your_key</li>
+                              <li><span className="font-sans font-medium text-slate-500 dark:text-slate-400">Base64 / Token: </span>SHADOW~eyJub2lzZUtleSI6...</li>
+                              <li><span className="font-sans font-medium text-slate-500 dark:text-slate-400">Full WhatsApp text: </span>Paste the entire message as received</li>
+                            </ul>
+                          </div>
 
                           <div className="space-y-4">
                             <div className="relative">
@@ -557,7 +580,7 @@ export default function App() {
                                 rows={4}
                                 value={sessionIdInput}
                                 onChange={e => setSessionIdInput(e.target.value)}
-                                placeholder="Paste your Session ID string here (e.g. SHADOW~eyJub2lzZUtleSI6... or raw base64 credentials)"
+                                placeholder="Paste your Session ID string here (e.g. GlobalTechInfo/MEGA-MD_eRyqLeLT#your_key, full message, or SHADOW~...)"
                                 className="w-full px-4 py-3.5 rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none font-mono text-xs text-slate-800 dark:text-slate-200 transition-all resize-none shadow-inner"
                               />
                               {sessionIdInput && (
@@ -627,15 +650,15 @@ export default function App() {
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
                               <div className="p-3.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
                                 <span className="font-bold text-indigo-600 block mb-1">1. Generate Session ID</span>
-                                <span className="leading-relaxed">Open your deployed Pair Code / QR Generator web app and link your WhatsApp number.</span>
+                                <span className="leading-relaxed">Visit <a href="https://paircode-session-id-generator.onrender.com/" target="_blank" rel="noreferrer" className="text-indigo-600 font-semibold underline">paircode-session-id-generator</a> and link your WhatsApp number.</span>
                               </div>
                               <div className="p-3.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-                                <span className="font-bold text-indigo-600 block mb-1">2. Copy Received Code</span>
-                                <span className="leading-relaxed">Copy the Session ID message sent to your WhatsApp (starts with <code className="font-mono">SHADOW~</code> or base64).</span>
+                                <span className="font-bold text-indigo-600 block mb-1">2. Copy Session ID</span>
+                                <span className="leading-relaxed">Copy the complete code sent to your WhatsApp (starts with <code className="font-mono font-bold">GlobalTechInfo/MEGA-MD_</code> or <code className="font-mono font-bold">SHADOW~</code>).</span>
                               </div>
                               <div className="p-3.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
                                 <span className="font-bold text-indigo-600 block mb-1">3. Paste & Connect</span>
-                                <span className="leading-relaxed">Paste the code in the box above and click <b>Connect Bot</b>. The bot goes online instantly.</span>
+                                <span className="leading-relaxed">Paste the code into the box above and click <b>Connect Bot</b>. The bot downloads credentials and connects immediately!</span>
                               </div>
                             </div>
                           </div>

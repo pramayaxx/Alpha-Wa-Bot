@@ -9,6 +9,7 @@ const PDFDocument = require('pdfkit');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, makeCacheableSignalKeyStore, jidNormalizedUser, fetchLatestBaileysVersion, Browsers, downloadMediaMessage, delay } = require('@whiskeysockets/baileys');
 const NodeCache = require('node-cache');
 const { GoogleGenAI } = require('@google/genai');
+const { File: MegaFile } = require('megajs');
 
 // Ensure dist/index.html is built
 const distIndexPath = path.join(__dirname, 'dist', 'index.html');
@@ -182,50 +183,176 @@ async function parseAndSaveSessionId(rawSessionId, targetSession = 'default') {
         throw new Error('Please enter a valid Session ID string.');
     }
     
-    let clean = rawSessionId.trim();
-    // Strip common prefixes e.g. SHADOW~, ALPHA~, PRABHATH-MD~, SESSION_ID~, etc.
-    if (clean.includes('~')) {
-        const parts = clean.split('~');
-        clean = parts.slice(1).join('~').trim();
-    } else if (clean.includes(':::')) {
-        clean = clean.split(':::')[1].trim();
-    } else if (clean.startsWith('SESSION_') && clean.includes('_')) {
-        clean = clean.substring(clean.indexOf('_') + 1).trim();
-    }
-
+    let text = rawSessionId.trim();
     let credsJson = null;
 
-    // Check if it is direct JSON
-    if (clean.startsWith('{') && clean.endsWith('}')) {
+    // 1. Check direct JSON first
+    if (text.startsWith('{') && text.endsWith('}')) {
         try {
-            credsJson = JSON.parse(clean);
+            credsJson = JSON.parse(text);
         } catch(e) {}
     }
 
-    // Try Base64 decode
+    // 2. Extract Pastebin / Paste.rs ID from prefixes like GlobalTechInfo/MEGA-MD_eRyqLeLT or MEGA-MD~eRyqLeLT
     if (!credsJson) {
+        let cleanId = text
+            .replace(/^GlobalTechInfo\//i, '')
+            .replace(/^MEGA-MD[~_]/i, '')
+            .replace(/^MEGA_MD[~_]/i, '')
+            .replace(/^MEGA[~_]/i, '')
+            .replace(/^SESSION[~_]/i, '')
+            .replace(/^SHADOW[~_]/i, '')
+            .replace(/^ALPHA[~_]/i, '')
+            .trim();
+
+        // If it's a short alphanumeric identifier (like eRyqLeLT), check Pastebin and paste.rs
+        if (/^[a-zA-Z0-9_-]{4,30}$/.test(cleanId)) {
+            const pasteUrls = [
+                `https://pastebin.com/raw/${cleanId}`,
+                `https://paste.rs/${cleanId}`,
+                `https://rentry.co/${cleanId}/raw`
+            ];
+
+            for (const url of pasteUrls) {
+                try {
+                    console.log(`[SESSION-IMPORT] Checking paste URL: ${url}`);
+                    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+                    if (res.ok) {
+                        const rawBody = await res.text();
+                        if (rawBody && rawBody.startsWith('{') && rawBody.includes('noiseKey')) {
+                            credsJson = JSON.parse(rawBody);
+                            console.log(`[SESSION-IMPORT] Successfully retrieved credentials from ${url}!`);
+                            break;
+                        }
+                    }
+                } catch (e) {
+                    console.log(`[SESSION-IMPORT] Paste trial failed for ${url}:`, e.message);
+                }
+            }
+        }
+    }
+
+    // 3. Handle Mega.nz Session Format (e.g. GlobalTechInfo/MEGA-MD_eRyqLeLT#key or https://mega.nz/file/...)
+    if (!credsJson && (
+        text.includes('mega.nz') || 
+        text.includes('#') ||
+        text.includes('MEGA-MD') || 
+        text.includes('GlobalTechInfo')
+    )) {
+        const megaUrlMatch = text.match(/https:\/\/mega\.nz\/file\/([a-zA-Z0-9_-]+)(?:#([a-zA-Z0-9_-]+))?/);
+        const megaPrefixMatch = text.match(/(?:GlobalTechInfo\/)?MEGA-MD[~_]([a-zA-Z0-9_-]+)(?:[#_~]([a-zA-Z0-9_-]+))?/i);
+
+        let fileId = '';
+        let fileKey = '';
+
+        if (megaUrlMatch) {
+            fileId = megaUrlMatch[1];
+            fileKey = megaUrlMatch[2] || '';
+        } else if (megaPrefixMatch) {
+            fileId = megaPrefixMatch[1];
+            fileKey = megaPrefixMatch[2] || '';
+        } else {
+            let clean = text
+                .replace(/^GlobalTechInfo\//i, '')
+                .replace(/^MEGA-MD[~_]/i, '')
+                .replace(/^MEGA_MD[~_]/i, '')
+                .replace(/^MEGA[~_]/i, '')
+                .trim();
+            
+            if (clean.includes('#')) {
+                const parts = clean.split('#');
+                fileId = parts[0].replace('https://mega.nz/file/', '');
+                fileKey = parts[1];
+            } else if (clean.includes('~')) {
+                const parts = clean.split('~');
+                fileId = parts[0];
+                fileKey = parts[1];
+            } else if (clean.includes('_') && clean.split('_').length === 2) {
+                const parts = clean.split('_');
+                fileId = parts[0];
+                fileKey = parts[1];
+            } else {
+                fileId = clean;
+            }
+        }
+
+        if (fileId && !fileKey) {
+            const hashAnywhere = text.match(/#([a-zA-Z0-9_-]{8,})/);
+            if (hashAnywhere) {
+                fileKey = hashAnywhere[1];
+            }
+        }
+
+        if (fileId && fileKey) {
+            const possibleUrls = [
+                `https://mega.nz/file/${fileId}#${fileKey}`,
+                `https://mega.nz/file/${fileId}`
+            ];
+
+            for (const url of possibleUrls) {
+                try {
+                    console.log(`[MEGA-MD] Attempting download from Mega URL: ${url}`);
+                    const file = MegaFile.fromURL(url);
+                    const buffer = await file.downloadBuffer();
+                    const content = buffer.toString('utf8');
+                    try {
+                        credsJson = JSON.parse(content);
+                        if (credsJson) {
+                            console.log(`[MEGA-MD] Successfully downloaded and parsed creds.json from Mega!`);
+                            break;
+                        }
+                    } catch(e2) {
+                        const decoded = Buffer.from(content.trim(), 'base64').toString('utf8');
+                        credsJson = JSON.parse(decoded);
+                        if (credsJson) break;
+                    }
+                } catch(err) {
+                    console.log(`[MEGA-MD] Mega download trial failed (${url}):`, err.message);
+                }
+            }
+        }
+    }
+
+    // 4. Base64 Decode
+    if (!credsJson) {
+        let b64Candidate = text;
+        const base64PatternMatch = text.match(/(?:SHADOW~|ALPHA~|PRABATH~|SESSION~)?([A-Za-z0-9+/=_-]{100,})/);
+        if (base64PatternMatch) {
+            b64Candidate = base64PatternMatch[1];
+        } else if (b64Candidate.includes('~')) {
+            b64Candidate = b64Candidate.split('~').slice(1).join('~').trim();
+        } else if (b64Candidate.includes(':::')) {
+            b64Candidate = b64Candidate.split(':::')[1].trim();
+        } else if (b64Candidate.startsWith('SESSION_') && b64Candidate.includes('_')) {
+            b64Candidate = b64Candidate.substring(b64Candidate.indexOf('_') + 1).trim();
+        }
+
         try {
-            let normalizedBase64 = clean.replace(/-/g, '+').replace(/_/g, '/');
+            let normalizedBase64 = b64Candidate.replace(/-/g, '+').replace(/_/g, '/');
             while (normalizedBase64.length % 4 !== 0) {
                 normalizedBase64 += '=';
             }
             const decoded = Buffer.from(normalizedBase64, 'base64').toString('utf8');
             credsJson = JSON.parse(decoded);
-        } catch (e) {
-            // Check if it is a remote link (Pastebin / Gist / RAW url)
-            if (clean.startsWith('http://') || clean.startsWith('https://')) {
-                const fetchRes = await fetch(clean);
-                const text = await fetchRes.text();
-                try {
-                    credsJson = JSON.parse(text);
-                } catch(e2) {
-                    const decoded = Buffer.from(text.trim(), 'base64').toString('utf8');
-                    credsJson = JSON.parse(decoded);
-                }
-            } else {
-                throw new Error('Invalid Session ID format. Could not decode base64 or JSON credentials.');
+        } catch(e) {}
+    }
+
+    // 5. Remote URL Fetcher (Pastebin / Gist / RAW url)
+    if (!credsJson && (text.startsWith('http://') || text.startsWith('https://'))) {
+        try {
+            const fetchRes = await fetch(text, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+            const bodyText = await fetchRes.text();
+            try {
+                credsJson = JSON.parse(bodyText);
+            } catch(e2) {
+                const decoded = Buffer.from(bodyText.trim(), 'base64').toString('utf8');
+                credsJson = JSON.parse(decoded);
             }
-        }
+        } catch(e) {}
+    }
+
+    if (!credsJson) {
+        throw new Error('වලංගු නොවන Session ID එකකි. කරුණාකර ඔබගේ WhatsApp වෙත ලැබුණු සම්පූර්ණ Session ID කේතය හෝ සම්පූර්ණ පණිවිඩය Paste කරන්න.');
     }
 
     // Unwrap if wrapped in { creds: { ... } }
